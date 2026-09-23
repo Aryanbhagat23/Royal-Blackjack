@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+# The four trained agents (q_*.pkl) ARE committed so the app starts instantly.
