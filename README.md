@@ -1,3 +1,4 @@
+### 🎮 [Play it live → royal-blackjack.streamlit.app](https://royal-blackjack.streamlit.app)
 # ♠ Royal Blackjack ♥
 ### A casino that taught itself to play: reinforcement learning in action
 
@@ -6,7 +7,18 @@ to play entirely on their own through **Monte Carlo reinforcement learning**. No
 the agents started knowing nothing, played hundreds of thousands of hands, and rediscovered the
 professional "basic strategy" from wins and losses alone.
 
-> 📸 *Add screenshots here: the casino table, the Casino Advisor, and the AI Lab learning curve.*
+![Royal Blackjack home page](screenshots/home.png)
+
+<table>
+<tr>
+<td width="50%"><img src="screenshots/casino-table.png" alt="Casino table with AI players and the Professor"><br><sub><b>Casino table</b> — AI players beside you, the Professor explaining every move, live odds from the shoe.</sub></td>
+<td width="50%"><img src="screenshots/card-counter.png" alt="Card counter page"><br><sub><b>Card counter</b> — what each true count is worth, learned by playing 25 million shoe rounds.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="screenshots/algorithm-race.png" alt="Algorithm race comparison"><br><sub><b>Algorithm race</b> — Monte Carlo vs Q-learning vs SARSA vs a from-scratch neural network.</sub></td>
+<td width="50%"><img src="screenshots/neon-theme.png" alt="Neon Vegas theme"><br><sub><b>Five themes</b> — one click restyles every page, table, card and chip.</sub></td>
+</tr>
+</table>
 
 ---
 
@@ -17,9 +29,11 @@ professional "basic strategy" from wins and losses alone.
 | 🎨 **5 casino themes** | Classic Gold, Neon Vegas, Tokyo Night, Pirate Tavern, and Cyber Casino. One click restyles every page, table, card, chip, and font, each with its own effects (neon lights, falling petals, gold doubloons, terminal scanlines). |
 | 🎰 **Casino Table** | Full casino table with chips, a 6-deck shoe, dealing animations, four table styles, and AI players seated beside you. |
 | 👥 **Multiplayer** | Online rooms: create a table, share the 5-letter code or invite link, and up to 4 friends play against the same dealer from their own devices, with live turns, a leaderboard, chat, and emoji reactions. |
+| 🔍 **What if?** | After every hand, replay each decision: what you chose, what the expert would have chosen, and — using the dealer's real hand — exactly what standing instead would have produced. |
 | 🎓 **The Professor** | Live coach that recommends the best move, explains why, shows real bust odds from the shoe, and grades your decisions. |
 | 🧭 **Casino Advisor** | Tap your cards and the dealer's up card to get the best move, then print a strategy card generated from what the AI learned. |
 | 🧮 **Card Counter** | A second agent trained on a real 6-deck shoe with the Hi-Lo count in its state. It learns what each count is worth, how much to bet, and which decisions the count should change — and it beats the house edge. |
+| 🔬 **Algorithm race** | The same game learned four ways — Monte Carlo, Q-learning, SARSA, and a Deep Q-Network written from scratch in numpy — scored on chart accuracy and money. |
 | 🧪 **AI Lab** | Strategy charts, a live learning-curve experiment, a Q-value explorer, and agent tournaments. |
 | 📖 **How the AI Works** | The reinforcement learning explained with diagrams, equations, and the actual code. |
 
@@ -70,6 +84,20 @@ profit around **+1**, and rediscovered classic deviations (double 9 vs 2 at a po
 negative one). Counting is the only version here that beats the house edge — by a fraction of a percent, with huge
 swings, under ideal conditions. It is a demonstration, not a business plan.
 
+### Algorithms compared (`algorithms.py`)
+
+| Algorithm | Matches the chart | Per $100 |
+|---|---|---|
+| 🎲 Monte Carlo (used by the main agent) | **92%** | −0.8 |
+| ⚡ Q-learning | 82% | −1.5 |
+| 🐢 SARSA | 82% | −3.0 |
+| 🧠 Deep Q-Network (numpy, no PyTorch) | 75% | −6.6 |
+
+Monte Carlo wins because hands are short and the reward comes at the end, so learning from the true result is
+unbiased. Temporal-difference methods bootstrap from their own estimates (extra noise, no benefit here), and the
+neural network approximates a table that only needs a few hundred entries while training ~50× slower per hand.
+Neural networks earn their keep when the state space is too large to tabulate.
+
 ### Results (Expert, 30 million training hands per dealer)
 
 | | Result |
@@ -106,6 +134,11 @@ To retrain the counting agents (25 million shoe rounds each, a few minutes):
 python counting.py 25000000
 ```
 
+To re-run the algorithm race:
+```bash
+python algorithms.py 3000000
+```
+
 ---
 
 ## 📁 Project structure
@@ -119,6 +152,7 @@ advisor.py        Casino Advisor and printable strategy card
 lab.py            AI Lab: charts, learning curve, Q-values, tournaments
 card_counter.py   Card Counter page: count value, bet ramp, deviations, simulation
 counting.py       The card-counting agent: shoe simulation, bet sizing, deviation measurement
+algorithms.py     Q-learning, SARSA and a from-scratch neural DQN, for the algorithm race
 learn.py          Reinforcement learning explained
 shared.py         Shared agents, dealer rules, theme engine and table renderer
 blackjack_rl.py   The RL agent: environment, training, evaluation

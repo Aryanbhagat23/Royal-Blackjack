@@ -399,7 +399,7 @@ def chip_html(amount):
     return f'<div class="chip" style="background:{bg};color:{fg};border-color:{edge}">${amount:,.0f}</div>'
 
 
-def scene_css(t, felt_h=452, center_top=150, arc_top=182, seats_top=214, seat_w=162, card_w=56, card_h=80):
+def scene_css(t, felt_h=452, center_top=150, arc_top=182, seats_top=214, seat_w=162, card_w=56, card_h=80, gap=18, side_pad=46):
     f1, f2, f3 = t["felt"]
     r1, r2 = t["rail"]
     b1, b2 = t["back"]
@@ -438,7 +438,8 @@ body {{ margin: 0; background: transparent; font-family: {t['body_font']}; overf
 .result.win {{ background: linear-gradient(180deg, {a}, {t['accent_dark']}); color: {t['on_accent']}; {'box-shadow: 0 0 30px ' + a + ';' if e in ('neon', 'cyber') else ''} }}
 .result.lose {{ background: linear-gradient(180deg, #e0344b, #8a0f1f); color: #fff; }}
 .result.push {{ background: linear-gradient(180deg, #f0f0f0, #a9a9a9); color: #222; }}
-.seats {{ position: absolute; left: 0; right: 0; top: {seats_top}px; display: flex; justify-content: center; gap: 18px; z-index: 2; }}
+.seats {{ position: absolute; left: 0; right: 0; top: {seats_top}px; display: flex; justify-content: center;
+         gap: {gap}px; padding: 0 {side_pad}px; z-index: 2; }}
 .hands {{ display: flex; gap: 10px; justify-content: center; }}
 .hgroup {{ position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 4px; border-radius: 12px; }}
 .hgroup.focus {{ background: rgba(255,255,255,.08); outline: 2px solid {a}; }}

@@ -342,8 +342,14 @@ def table_html(room, me):
     else:
         dcards, dlabel = '<div class="ghost"></div><div class="ghost"></div>', "—"
 
+    seat_keys = list(room["seat_order"]) + (["ai"] if room["ai"] else [])
+    n_seats = max(1, len(seat_keys))
+    # seats shrink as the table fills up, so nobody falls off the curved edge
+    SEAT_SIZES = {1: (168, 60, 86, 18), 2: (168, 60, 86, 18), 3: (150, 54, 78, 14),
+                  4: (126, 46, 66, 10)}
+    seat_w, card_w, card_h, gap = SEAT_SIZES.get(n_seats, (106, 40, 58, 8))
     seats = ""
-    for k in list(room["seat_order"]) + (["ai"] if room["ai"] else []):
+    for k in seat_keys:
         is_ai = k == "ai"
         p = None if is_ai else room["players"][k]
         name = "🎩 VETERAN VIC" if is_ai else ("YOU" if k == me else p["name"].upper())
@@ -394,7 +400,9 @@ def table_html(room, me):
             arc_sub = '<span class="live">ROUND OVER</span>'
     ss.mp_anim = seen
 
-    css = scene_css(t, felt_h=438, center_top=146, arc_top=176, seats_top=206, seat_w=150, card_w=54, card_h=78)
+    css = scene_css(t, felt_h=438, center_top=146, arc_top=176, seats_top=206,
+                    seat_w=seat_w, card_w=card_w, card_h=card_h, gap=gap,
+                    side_pad=52 if n_seats <= 3 else 24)
     return f"""<style>{css}</style>
 <div class="rail"><div class="felt">{scene_effects(t)}
 <div class="code">ROOM {room['code']}</div>
