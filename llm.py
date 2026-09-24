@@ -42,13 +42,15 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _web = urllib.request.build_opener()
 PREFERRED = ["llama3.2", "llama3.1", "llama3", "mistral", "phi3", "qwen2.5", "gemma2"]
 
-# Known-good text chat models, best first. Anything else the key can use is listed after these.
-GEMINI_PREFERRED = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite",
-                    "gemini-flash-lite-latest", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+# Used only if Google's model list can't be fetched. Normally the newest stable Flash models the key
+# can use are picked automatically, because Google retires older ones for new users.
+GEMINI_FALLBACK = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"]
+MAX_MODEL_TRIES = 5                      # models tried per question before giving up
 # Model families that answer generateContent but are not text chat models (images, speech, robots...).
 _NOT_CHAT = ("embedding", "aqa", "vision", "image", "tts", "audio", "live", "gemma", "robotics",
              "computer-use", "imagen", "veo", "learnlm", "banana", "thinking-exp")
 HISTORY_TURNS = 12                       # how many past messages are sent with each question
+_retired = set()                         # models Google refused as retired, skipped from then on
 
 
 class LLMError(Exception):
@@ -185,25 +187,32 @@ def _is_chat_model(name):
     return name.startswith("gemini") and not any(bad in name for bad in _NOT_CHAT)
 
 
+_FLASH = re.compile(r"^gemini-(\d+(?:\.\d+)?)-flash(-lite)?$")
+
+
 def rank_gemini(names):
-    """Known-good models first (in GEMINI_PREFERRED order), then stable flash, then the rest."""
+    """Best first: the newest stable Flash, then the newest Flash-Lite (bigger free quota), then the
+    '-latest' aliases, then everything else (previews and dated versions last)."""
     def rank(n):
-        if n in GEMINI_PREFERRED:
-            return (0, GEMINI_PREFERRED.index(n), len(n))
-        return (1, 0 if "flash" in n else 1, 1 if ("preview" in n or "exp" in n) else 0, len(n))
-    return sorted(set(names), key=rank)
+        m = _FLASH.match(n)
+        if m:
+            return (0, -float(m.group(1)), 1 if m.group(2) else 0)
+        if n in ("gemini-flash-latest", "gemini-flash-lite-latest"):
+            return (1, 0, n != "gemini-flash-latest")
+        return (2, 0 if "flash" in n else 1, 1 if ("preview" in n or "exp" in n) else 0, len(n))
+    return sorted(set(names) - _retired, key=rank)
 
 
 def gemini_models(key):
-    """Ask Google which models this key can actually use, so retired names are never offered.
+    """Ask Google which models this key can actually use, so no model name is hard-coded.
     Returns chat-capable ones, best first. If the list can't be fetched (network hiccup, bad key),
-    fall back to the known-good names; the chat then reports the real problem when it's used."""
+    fall back to Google's '-latest' aliases; the chat then reports the real problem when it's used."""
     req = urllib.request.Request(f"{GEMINI_HOST}/v1beta/models?pageSize=1000", headers={"x-goog-api-key": key})
     try:
         with _web.open(req, timeout=8) as r:
             data = json.loads(r.read().decode())
     except Exception:
-        return list(GEMINI_PREFERRED[:3])
+        return list(GEMINI_FALLBACK)
     names = []
     for m in data.get("models", []):
         if "generateContent" not in m.get("supportedGenerationMethods", []):
@@ -211,37 +220,41 @@ def gemini_models(key):
         name = m.get("name", "").split("/")[-1]
         if name and _is_chat_model(name):
             names.append(name)
-    return rank_gemini(names) or list(GEMINI_PREFERRED[:3])
+    return rank_gemini(names) or list(GEMINI_FALLBACK)
 
 
-def _gemini_error(e):
-    """Turn an HTTP error from Google into (message, worth_trying_another_model)."""
+def _gemini_error(e, model=""):
+    """Turn an HTTP error from Google into (message, worth_trying_another_model, suggested_model)."""
     detail = ""
     try:
         detail = json.loads(e.read().decode()).get("error", {}).get("message", "")
     except Exception:
         pass
     low = detail.lower()
+    hint = re.search(r"use models/([\w.-]+)", detail)
+    suggested = hint.group(1) if hint else None
+    if e.code == 404 or "no longer available" in low:
+        _retired.add(model)
+        return f"{model} has been retired by Google. Pick another model.", True, suggested
     if e.code == 400 and ("api key" in low or "api_key" in low):
-        return "Google rejected the API key. Check GEMINI_API_KEY in your Streamlit secrets.", False
+        return "Google rejected the API key. Check GEMINI_API_KEY in your Streamlit secrets.", False, None
     if e.code in (401, 403):
         return (f"This API key isn't allowed to use Gemini ({detail or 'permission denied'}). Make sure the "
-                "Generative Language API is enabled for the key's project."), False
+                "Generative Language API is enabled for the key's project."), False, None
     if e.code == 429:
         return ("Gemini's free-tier limit was reached (a few requests per minute and a daily cap per model). "
-                "Wait a minute and try again, or pick a different model."), True
-    if e.code == 404:
-        return f"That model is no longer available ({detail or 'not found'}). Pick another model.", True
+                "Wait a minute and try again, or pick a different model."), True, suggested
     if e.code >= 500:
-        return f"Google's servers are busy right now (error {e.code}). Try again in a moment.", True
-    return f"Gemini returned an error {e.code}: {detail}", e.code == 400
+        return f"Google's servers are busy right now (error {e.code}). Try again in a moment.", True, suggested
+    return f"Gemini returned an error {e.code}: {detail}", e.code == 400, suggested
 
 
 def _gemini_once(model, messages, system, key, temperature):
     history = clean_history(messages)
     if not history:
         raise LLMError("There's no question to answer yet.")
-    config = {"temperature": temperature, "maxOutputTokens": 2048}
+    # Newer models may think before answering, and those hidden tokens count toward this limit.
+    config = {"temperature": temperature, "maxOutputTokens": 4096}
     if "2.5-flash" in model:
         # 2.5 Flash "thinks" before answering and those hidden tokens count against maxOutputTokens,
         # which used to leave answers cut off or empty. Short tutoring answers don't need it.
@@ -284,14 +297,18 @@ def _gemini_once(model, messages, system, key, temperature):
 
 
 def gemini_stream(model, messages, context, key, temperature=0.4, style="", examples=(), fallbacks=()):
-    """Stream a Gemini reply. If the chosen model is rate limited or retired before it has said anything,
-    quietly try the next model in `fallbacks`. Raises LLMError with a plain-language message."""
+    """Stream a Gemini reply. If a model is rate limited or retired before it has said anything, quietly
+    try the next one (Google's own suggested replacement first, then `fallbacks`). Raises LLMError."""
     if not key:
         raise LLMError("No GEMINI_API_KEY found in Streamlit secrets or the environment.")
     system = _system(context, style, examples)
-    tried = [model] + [m for m in fallbacks if m != model][:2]
-    last = None
-    for m in tried:
+    queue = [model] + [m for m in fallbacks if m != model]
+    tried, errors = [], []
+    while queue and len(tried) < MAX_MODEL_TRIES:
+        m = queue.pop(0)
+        if m in tried or (m in _retired and m != model):
+            continue
+        tried.append(m)
         started = False
         try:
             for piece in _gemini_once(m, messages, system, key, temperature):
@@ -299,17 +316,23 @@ def gemini_stream(model, messages, context, key, temperature=0.4, style="", exam
                 yield piece
             return
         except urllib.error.HTTPError as e:
-            msg, retry = _gemini_error(e)
-            last = LLMError(msg)
+            msg, retry, suggested = _gemini_error(e, m)
+            errors.append((e.code, msg))
             if started or not retry:
-                raise last
+                raise LLMError(msg)
+            if suggested and suggested not in tried:
+                queue.insert(0, suggested)
         except LLMError:
             raise
         except Exception as e:
             if started:
                 raise LLMError(f"The connection to Gemini dropped mid-answer ({e}).")
-            last = LLMError(f"Could not reach Gemini ({e}). Check the internet connection.")
-    raise last
+            errors.append((0, f"Could not reach Gemini ({e}). Check the internet connection."))
+    if not errors:
+        raise LLMError("No Gemini model is available to answer right now.")
+    # The first model's problem is the one worth reporting; a rate limit anywhere explains the rest.
+    limited = [msg for code, msg in errors if code == 429]
+    raise LLMError(limited[0] if limited else errors[0][1])
 
 
 def providers():
