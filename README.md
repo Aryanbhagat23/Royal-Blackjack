@@ -1,4 +1,3 @@
-### 🎮 [Play it live → royal-blackjack.streamlit.app](https://royal-blackjack.streamlit.app)
 # ♠ Royal Blackjack ♥
 ### A casino that taught itself to play: reinforcement learning in action
 
@@ -33,6 +32,7 @@ professional "basic strategy" from wins and losses alone.
 | 🎓 **The Professor** | Live coach that recommends the best move, explains why, shows real bust odds from the shoe, and grades your decisions. |
 | 🧭 **Casino Advisor** | Tap your cards and the dealer's up card to get the best move, then print a strategy card generated from what the AI learned. |
 | 🧮 **Card Counter** | A second agent trained on a real 6-deck shoe with the Hi-Lo count in its state. It learns what each count is worth, how much to bet, and which decisions the count should change — and it beats the house edge. |
+| 💬 **Ask the Professor** (optional) | A chat that explains the agent's decisions in plain language, powered by either a local model (**Ollama**) or **Google Gemini**. It is fed the agent's real learned values, so it explains measured results instead of inventing advice. With neither configured it hides itself, and nothing else changes. |
 | 🔬 **Algorithm race** | The same game learned four ways — Monte Carlo, Q-learning, SARSA, and a Deep Q-Network written from scratch in numpy — scored on chart accuracy and money. |
 | 🧪 **AI Lab** | Strategy charts, a live learning-curve experiment, a Q-value explorer, and agent tournaments. |
 | 📖 **How the AI Works** | The reinforcement learning explained with diagrams, equations, and the actual code. |
@@ -98,6 +98,21 @@ unbiased. Temporal-difference methods bootstrap from their own estimates (extra 
 neural network approximates a table that only needs a few hundred entries while training ~50× slower per hand.
 Neural networks earn their keep when the state space is too large to tabulate.
 
+### Baselines
+
+Every result is measured against simpler players, so the numbers mean something:
+
+| Player | Money per $100 | What it is |
+|---|---|---|
+| 🎲 Random play | **−$43** | picks legal moves at random |
+| 📏 Simple rule | **−$5.54** | no learning: copy the dealer, hit until 17 |
+| 📘 Basic strategy chart | **−$0.48** | the best a non-counting player can do |
+| 🤖 Trained agent (30M hands) | **−$0.43** | learned from wins and losses alone |
+| 🧮 Counting agent | **+$0.60** | per $100 wagered — beats the house |
+
+"Rulebook Rita", a player that follows the simple rule with no learning at all, can be seated at the casino table
+next to the trained and rookie agents, so the difference is visible hand by hand.
+
 ### Results (Expert, 30 million training hands per dealer)
 
 | | Result |
@@ -153,6 +168,8 @@ lab.py            AI Lab: charts, learning curve, Q-values, tournaments
 card_counter.py   Card Counter page: count value, bet ramp, deviations, simulation
 counting.py       The card-counting agent: shoe simulation, bet sizing, deviation measurement
 algorithms.py     Q-learning, SARSA and a from-scratch neural DQN, for the algorithm race
+llm.py            Optional local-LLM support (Ollama): detection, context building, streaming
+ask.py            The "Ask the Professor" chat page
 learn.py          Reinforcement learning explained
 shared.py         Shared agents, dealer rules, theme engine and table renderer
 blackjack_rl.py   The RL agent: environment, training, evaluation
@@ -160,6 +177,29 @@ blackjack_rl.py   The RL agent: environment, training, evaluation
 ```
 
 ---
+
+## 💬 Optional: chat with the Professor
+
+The chat is optional — nothing else depends on it. Set up either provider, or both and pick in the app:
+
+**A model on your own computer** — free and private, but local only:
+```bash
+ollama pull llama3.2     # about 2 GB, one time
+ollama serve             # then reload the app
+```
+
+**Google Gemini** — has a free tier and works on the deployed app. Get a key from
+[aistudio.google.com](https://aistudio.google.com), then put it in `.streamlit/secrets.toml` locally and under
+**Settings → Secrets** on Streamlit Cloud:
+```toml
+GEMINI_API_KEY = "your-key-here"
+```
+The key is read from secrets or the environment and is never written into the code or committed. Model names are
+discovered from the API at runtime rather than hard-coded, because Google renames and retires them often.
+
+Every question is sent with the agent's **real numbers** attached (the learned value of each move in that exact
+situation, the bust odds from the shoe, the true count), so the model explains the reinforcement learning results
+rather than making up its own Blackjack advice.
 
 ## ⚠️ Limitations and future work
 

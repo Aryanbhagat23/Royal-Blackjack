@@ -21,6 +21,7 @@ pages = {
         st.Page("lab.py", title="AI Lab", icon="🧪"),
         st.Page("card_counter.py", title="Card Counter", icon="🧮"),
         st.Page("learn.py", title="How the AI Works", icon="🎓"),
+        st.Page("ask.py", title="Ask the Professor", icon="💬"),
     ],
 }
 nav = st.navigation(pages, position="top")

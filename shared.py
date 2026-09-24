@@ -98,6 +98,17 @@ def dealer_bust_chance(up_rank, hit_soft17, trials=20_000):
     return busts / trials
 
 
+@st.cache_data(show_spinner=False)
+def baselines(hit_soft17, hands=400_000):
+    """Reference points every chart is measured against: what simpler players score."""
+    rand = rl.evaluate({}, hands // 3, hit_soft17, random_unseen=True)
+    rule = rl.evaluate(None, hands, hit_soft17, policy=rl.simple_rule_policy())
+    chart = rl.evaluate(None, hands, hit_soft17, policy=rl.basic_strategy_policy(hit_soft17))
+    return {"Random play": rand["avg_reward"] * 100,
+            "Simple rule (stand on 17)": rule["avg_reward"] * 100,
+            "Basic strategy chart": chart["avg_reward"] * 100}
+
+
 def explain(best, cards, up, bust, dbust):
     """Plain-English reasoning for the agent's move (rule-based templates)."""
     total, soft = rl.hand_info(cards)
@@ -476,7 +487,8 @@ body {{ margin: 0; background: transparent; font-family: {t['body_font']}; overf
 .chip {{ width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 800 11px {t['body_font']};
         border: 5px dashed; box-shadow: 0 3px 0 rgba(0,0,0,.35), 0 5px 10px rgba(0,0,0,.5); }}
 .name {{ font: 800 13px {t['body_font']}; letter-spacing: 1px; text-shadow: 0 1px 2px #000; text-align: center; }}
-.sub {{ font-size: 11px; color: rgba(255,255,255,.75); text-align: center; }}
+.sub {{ font-size: 11px; color: rgba(255,255,255,.75); text-align: center; max-width: 100%;
+       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .shoe {{ position: absolute; top: 18px; right: 24px; text-align: center; font-size: 11px; color: rgba(255,255,255,.8); z-index: 3; }}
 .shoebox {{ width: 84px; height: 52px; background: linear-gradient(135deg, #2b2b2b, #0e0e0e); border-radius: 6px 22px 6px 6px; border: 1px solid #555;
            position: relative; overflow: hidden; margin-bottom: 4px; }}
@@ -538,3 +550,4 @@ def render_html(html, height):
     else:
         import streamlit.components.v1 as components
         components.html(html, height=height, scrolling=False)
+

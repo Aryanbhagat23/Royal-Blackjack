@@ -5,7 +5,7 @@ import streamlit as st
 
 import algorithms as alg
 import blackjack_rl as rl
-from shared import DEALERS, LEVELS, get_agents, get_bundles, page_header, value_bars
+from shared import DEALERS, LEVELS, baselines, get_agents, get_bundles, page_header, value_bars
 
 AGENTS = get_agents()
 BUNDLES = get_bundles()
@@ -72,12 +72,14 @@ with t0:
         with st.spinner("Simulating..."):
             e = rl.evaluate(AGENTS[("expert", rule)], hands, hs17)
             b = rl.evaluate(None, hands, hs17, policy=rl.basic_strategy_policy(hs17))
+            s_rule = rl.evaluate(None, hands, hs17, policy=rl.simple_rule_policy())
             r = rl.evaluate({}, min(hands, 100_000), hs17, random_unseen=True)
         margin = 2 * 1.15 / hands ** 0.5 * 100
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("🎩 Expert agent", f"{e['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
         c2.metric("📘 Basic strategy chart", f"{b['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
-        c3.metric("🎲 Random play", f"{r['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
+        c3.metric("📏 Simple rule (stand on 17)", f"{s_rule['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
+        c4.metric("🎲 Random play", f"{r['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
         st.caption(f"Margin of error about ±{margin:.2f} per $100. Even perfect play loses a little: that's the house edge.")
 
 
@@ -120,14 +122,25 @@ with t2:
         df["Return per $100"] *= 100
         df["Win rate"] *= 100
         df = df.set_index("Hands trained")
+        base = baselines(hs17)
+        for label, val in base.items():
+            df[label] = val
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Money won or lost per $100 bet**")
-            st.line_chart(df["Return per $100"], color="#d4af37", height=260)
+            st.line_chart(df[["Return per $100", "Simple rule (stand on 17)", "Basic strategy chart"]],
+                          color=["#d4af37", "#e0834a", "#5fd07a"], height=260)
+            st.caption("Dashed references: the simplest possible model (copy the dealer: hit until 17) and the "
+                       "official basic strategy chart, which is the best a non-counting player can do.")
         with c2:
             st.markdown("**Win rate (%)**")
             st.line_chart(df["Win rate"], color="#5fd07a", height=260)
         first, last = df.iloc[0], df.iloc[-1]
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("🎲 Random play", f"{base['Random play']:+.1f}", "per $100", delta_color="off")
+        b2.metric("📏 Simple rule (stand on 17)", f"{base['Simple rule (stand on 17)']:+.2f}", "per $100", delta_color="off")
+        b3.metric("📘 Basic strategy chart", f"{base['Basic strategy chart']:+.2f}", "per $100", delta_color="off")
+        b4.metric("🤖 This agent, trained", f"{last['Return per $100']:+.2f}", "per $100", delta_color="off")
         st.success(f"After {df.index[-1]:,} hands, the agent went from **{first['Return per $100']:+.1f}** to "
                    f"**{last['Return per $100']:+.1f}** per $100, and its win rate from {first['Win rate']:.1f}% "
                    f"to {last['Win rate']:.1f}%.")
@@ -229,7 +242,13 @@ with t5:
             st.line_chart(rdf.pivot(index="Hands trained", columns="Algorithm", values="Chart match %"), height=300)
         with c2:
             st.markdown("**Money won or lost per $100 bet**")
-            st.line_chart(rdf.pivot(index="Hands trained", columns="Algorithm", values="Per $100"), height=300)
+            money = rdf.pivot(index="Hands trained", columns="Algorithm", values="Per $100")
+            base = baselines(hs17)
+            money["Basic strategy (best possible)"] = base["Basic strategy chart"]
+            money["Simple rule (stand on 17)"] = base["Simple rule (stand on 17)"]
+            st.line_chart(money, height=300)
+            st.caption("The two flat lines are the references: the best a non-counting player can do, and the "
+                       "simplest model that just copies the dealer.")
         final = (rdf.sort_values("Hands trained").groupby("Algorithm").last()
                  .sort_values("Chart match %", ascending=False))
         st.dataframe(final.style.format({"Chart match %": "{:.1f}%", "Per $100": "{:+.2f}",

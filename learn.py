@@ -75,6 +75,17 @@ st.markdown(
 )
 
 st.markdown("### 5. Proof that it learned")
+st.markdown("Every result is measured against three baselines, so “it plays well” means something:")
+st.markdown(
+    "| Player | Money per $100 | What it is |\n|---|---|---|\n"
+    "| 🎲 Random play | **−$43** | picks legal moves at random |\n"
+    "| 📏 Simple rule | **−$5.54** | no learning at all: copy the dealer, hit until 17 |\n"
+    "| 📘 Basic strategy chart | **−$0.48** | the best a non-counting player can do |\n"
+    "| 🤖 This agent (30M hands) | **−$0.43** | learned from wins and losses alone |\n"
+    "| 🧮 Counting agent | **+$0.60** | per $100 wagered, the only one that beats the house |\n"
+)
+st.caption("The simple rule is the important one: it shows how much of the gap is closed by learning rather "
+           "than by just following an obvious heuristic.")
 st.markdown(
     f"- **The Expert** ({LEVELS['expert']:,} hands) matches textbook basic strategy on about 97% of decisions, "
     "and every difference is a statistical tie.\n"
@@ -101,11 +112,30 @@ st.markdown(
 )
 st.page_link("card_counter.py", label="Open the Card Counter", icon="🧮")
 
-st.markdown("### 7. What isn't reinforcement learning")
+st.markdown("### 7. Four algorithms, same game")
+st.markdown(
+    "The same Blackjack was learned four ways and scored identically:\n\n"
+    "| Algorithm | Matches the chart | Per $100 |\n|---|---|---|\n"
+    "| 🎲 Monte Carlo (this project) | **92%** | −0.8 |\n"
+    "| ⚡ Q-learning | 82% | −1.5 |\n"
+    "| 🐢 SARSA | 82% | −3.0 |\n"
+    "| 🧠 Deep Q-Network (numpy, from scratch) | 75% | −6.6 |\n\n"
+    "Monte Carlo wins because a Blackjack hand lasts two or three moves and the reward arrives at the end, so "
+    "waiting for the true result is unbiased and simple. Q-learning and SARSA learn from their own estimates, "
+    "which adds noise for no gain here. The neural network has to approximate a table with only a few hundred "
+    "entries, and trains about 50× slower per hand — neural networks pay off when the game is far too big to "
+    "tabulate, like Atari or Go."
+)
+st.page_link("lab.py", label="See the race in the AI Lab", icon="🔬")
+
+st.markdown("### 8. What isn't reinforcement learning")
+st.markdown("This is worth being clear about, because people assume the opposite:")
 st.markdown(
     "- **The Professor's explanations** are rule-based sentences written around the agent's decision.\n"
     "- **Bust percentages** come from probability and Monte Carlo simulation of the shoe.\n"
-    "- **The Hi-Lo card count** is a standard formula; the agent doesn't use it."
+    "- **The Hi-Lo card count** is a standard formula; the base agent doesn't use it.\n"
+    "- **The optional chat** (Ask the Professor) is a local language model through Ollama. It does not decide "
+    "anything: it is handed the agent's real learned values and asked to put them in plain words."
 )
 
 with st.expander("❓ Common questions"):

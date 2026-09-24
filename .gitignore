@@ -4,3 +4,6 @@ __pycache__/
 venv/
 .DS_Store
 # The four trained agents (q_*.pkl) ARE committed so the app starts instantly.
+
+# never commit API keys
+.streamlit/secrets.toml

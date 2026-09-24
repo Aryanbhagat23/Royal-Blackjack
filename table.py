@@ -8,6 +8,7 @@ import streamlit as st
 
 import blackjack_rl as rl
 import counting as C
+import llm
 from shared import (DEALERS, LEVELS, action_button_css, cards_html, get_bundles, chip_html, explain, get_agents, md_bold, page_header,
                     q_path, render_html, scene_css, scene_effects, theme, value_bars)
 
@@ -16,9 +17,11 @@ START_BANK = 1000
 
 AI_PLAYERS = {
     "veteran": {"name": "Veteran Vic", "emoji": "🎩", "level": "expert", "bet": 50,
-                "desc": "30M hands of experience"},
+                "desc": "30M hands of experience", "short": "30M hands"},
     "rookie": {"name": "Rookie Riley", "emoji": "🧢", "level": "rookie", "bet": 25,
-               "desc": "Only 5k hands of experience"},
+               "desc": "Only 5k hands of experience", "short": "5k hands"},
+    "rulebook": {"name": "Rulebook Rita", "emoji": "📏", "level": "rule", "bet": 25,
+                 "desc": "No learning: copies the dealer", "short": "no learning"},
 }
 HILO = {"2": 1, "3": 1, "4": 1, "5": 1, "6": 1, "7": 0, "8": 0, "9": 0,
         "10": -1, "J": -1, "Q": -1, "K": -1, "A": -1}
@@ -59,13 +62,19 @@ ss = st.session_state
 if "shoe" not in ss:
     init_state()
 ss.setdefault("dealer_key", "S17")
-ss.setdefault("seats", ["veteran", "rookie"])
+ss.setdefault("seats", ["veteran", "rookie", "rulebook"])
 ss.setdefault("show_prof", True)
 ss.setdefault("show_count", True)
 
 
 def rule():
     return DEALERS[ss.dealer_key]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def llm_status():
+    """Which chat providers are usable? Cached so it never slows the table down."""
+    return llm.providers()
 
 
 @st.cache_resource(show_spinner=False)
@@ -199,8 +208,11 @@ def apply_action(k, action):
 
 def seat_best(k, level="expert"):
     h = active_hand(k)
-    Q = AGENTS[(level, ss.dealer_key)]
     bank_ok = k != "you" or ss.bankroll >= committed() + h["bet"]
+    if level == "rule":
+        # The simplest possible model: no learning at all, just "hit until 17", like the dealer.
+        return ("stand" if rl.score(h["cards"]) >= 17 else "hit"), {}
+    Q = AGENTS[(level, ss.dealer_key)]
     return rl.best_action(Q, h["cards"], ss.dealer[1], len(h["cards"]) == 2 and bank_ok,
                           can_split(k, h) and bank_ok)
 
@@ -323,7 +335,8 @@ def seat_html(k, pos, n, seen, delay):
     info = None if me else AI_PLAYERS[k]
     name = "YOU" if me else f'{info["emoji"]} {info["name"]}'
     bank = ss.bankroll if me else ss.ai_bank[k]
-    sub = f"Bankroll ${bank:,.0f}" if me else f'{info["desc"]} · ${bank:,.0f}'
+    blurb = info["short"] if (info and n >= 4) else (info["desc"] if info else "")
+    sub = f"Bankroll ${bank:,.0f}" if me else f'{blurb} · ${bank:,.0f}'
     seat = ss.hands.get(k) if ss.phase != "betting" else None
     mid = (n - 1) / 2
     lift = 0 if n == 1 else 14 - 14 * abs(pos - mid) / mid
@@ -373,6 +386,8 @@ def render_table():
 
     ai = [k for k in AI_PLAYERS if k in ss.seats]
     display = ai[:1] + ["you"] + ai[1:]          # you sit in the middle of the arc
+    SEAT_SIZES = {1: (200, 62, 88), 2: (186, 60, 86), 3: (162, 56, 80), 4: (132, 48, 68)}
+    seat_w, card_w, card_h = SEAT_SIZES.get(len(display), (112, 42, 60))
     seats = ""
     for i, k in enumerate(display):
         html, delay = seat_html(k, i, len(display), seen, delay)
@@ -392,7 +407,9 @@ def render_table():
     pct = len(ss.shoe) / (52 * NUM_DECKS)
     count = (f'<div class="count">RC <b>{ss.running_count:+d}</b> · TC <b>{true_count():+.1f}</b></div>'
              if ss.show_count else "")
-    html = f"""<style>{scene_css(t)}</style>
+    html = f"""<style>{scene_css(t, seat_w=seat_w, card_w=card_w, card_h=card_h,
+                                  gap=18 if len(display) <= 3 else 10,
+                                  side_pad=46 if len(display) <= 3 else 22)}</style>
 <div class="rail"><div class="felt">{scene_effects(t)}
   <div class="shoe"><div class="shoebox"><div class="shoefill" style="width:{pct * 100:.0f}%"></div></div>{len(ss.shoe)} cards{count}</div>
   <div class="dealer"><div class="dname">{d['emoji']} {d['name'].upper()}</div><div class="hand">{dcards}</div>{dpill}</div>
@@ -577,6 +594,19 @@ with right:
             m1, m2 = st.columns(2)
             m1.metric("Your bust if hit", f"{bust:.0%}")
             m2.metric("Dealer bust", f"{dbust:.0%}")
+
+            provs = llm_status()
+            if provs:
+                with st.expander("💬 Ask about this hand"):
+                    q = st.text_input("Your question", key="hand_q",
+                                      placeholder="e.g. why not double here?", label_visibility="collapsed")
+                    if q:
+                        ctx = llm.hand_context(me["cards"], up, values, best, bust, dbust,
+                                               true_count() if ss.show_count else None, ss.bankroll)
+                        pid, plabel, pmodels = provs[0]
+                        pick = llm.pick_model(pmodels) if pid == "ollama" else pmodels[0]
+                        st.write_stream(llm.stream(pid, pick, [{"role": "user", "content": q}], ctx))
+                        st.caption(f"Answered by {plabel}, using the agent's real numbers for this exact hand.")
             tc = true_count()
             if ss.show_count and abs(tc) >= 2:
                 st.info(f"{'📈' if tc > 0 else '📉'} True count **{tc:+.1f}**: the shoe favors "

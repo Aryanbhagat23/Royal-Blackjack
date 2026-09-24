@@ -314,6 +314,14 @@ def basic_strategy(kind, total, up, hit_soft17=False):
     return letter
 
 
+def simple_rule_policy(stand_on=17):
+    """The simplest possible Blackjack model: copy the dealer. Hit until you reach `stand_on`.
+    No doubling, no splitting. Used as a baseline and as the 'Rulebook' player at the table."""
+    def pol(state, legal):
+        return 1 if state[0] >= stand_on else 0
+    return pol
+
+
 def basic_strategy_policy(hit_soft17=False):
     """A policy function that plays the textbook chart (for comparisons)."""
     def pol(state, legal):
