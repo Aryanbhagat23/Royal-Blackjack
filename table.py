@@ -604,8 +604,8 @@ with right:
                         ctx = llm.hand_context(me["cards"], up, values, best, bust, dbust,
                                                true_count() if ss.show_count else None, ss.bankroll)
                         pid, plabel, pmodels = provs[0]
-                        pick = llm.pick_model(pmodels) if pid == "ollama" else pmodels[0]
-                        st.write_stream(llm.stream(pid, pick, [{"role": "user", "content": q}], ctx))
+                        st.write_stream(llm.stream(pid, llm.default_model(pid, pmodels),
+                                                   [{"role": "user", "content": q}], ctx, fallbacks=pmodels))
                         st.caption(f"Answered by {plabel}, using the agent's real numbers for this exact hand.")
             tc = true_count()
             if ss.show_count and abs(tc) >= 2:

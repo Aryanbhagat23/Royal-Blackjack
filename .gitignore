@@ -5,5 +5,8 @@ venv/
 .DS_Store
 # The four trained agents (q_*.pkl) ARE committed so the app starts instantly.
 
+# the Professor's 👍/👎 learning (per deployment)
+professor_feedback.json*
+
 # never commit API keys
 .streamlit/secrets.toml

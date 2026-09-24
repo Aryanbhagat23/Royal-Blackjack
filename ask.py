@@ -1,11 +1,13 @@
-"""Ask the Professor — chat with a local LLM (Ollama) that is fed the agent's real numbers."""
+"""Ask the Professor — chat with an LLM (Ollama or Gemini) that is fed the agent's real numbers,
+and that learns from 👍 / 👎 which teaching style works best (see professor_rl.py)."""
 
 import streamlit as st
 
 import algorithms as alg
 import blackjack_rl as rl
 import llm
-from shared import DEALERS, baselines, get_bundles, page_header
+import professor_rl as prl
+from shared import DEALERS, baselines, get_agents, get_bundles, page_header
 
 page_header("💬 Ask the Professor",
             "Ask anything about Blackjack or the reinforcement learning behind it, in plain language.")
@@ -45,8 +47,7 @@ else:
     chosen = provs[0]
     st.caption(f"Powered by {chosen[1]}")
 provider, _, models = chosen
-default = llm.pick_model(models) if provider == "ollama" else models[0]
-model = st.selectbox("Model", models, index=models.index(default))
+model = st.selectbox("Model", models, index=models.index(llm.default_model(provider, models)))
 
 # ---- facts handed to the model so it can't invent numbers ----
 bundle = get_bundles()[("expert", "S17")]
@@ -56,6 +57,7 @@ try:
 except (OSError, ValueError):
     race = None
 context = llm.project_context(grade=grade, baselines=baselines(False), race=race)
+expert_q = get_agents()[("expert", "S17")]
 
 with st.expander("🔍 What the model is told before it answers"):
     st.caption("The language model is never asked to work Blackjack out for itself. These measured facts are "
@@ -63,31 +65,87 @@ with st.expander("🔍 What the model is told before it answers"):
                "its own.")
     st.code(context, language=None)
 
-st.session_state.setdefault("ask_msgs", [])
+ss = st.session_state
+ss.setdefault("ask_msgs", [])
+ss.setdefault("ask_error", None)
 
-if not st.session_state.ask_msgs:
+
+def ask(question):
+    ss.ask_msgs.append({"role": "user", "content": question})
+    ss.ask_error = None
+
+
+def rate(i):
+    """👍 / 👎 is the reward signal for the style bandit."""
+    m = ss.ask_msgs[i]
+    value = ss.get(f"fb_{i}")
+    if value is None or m.get("rated"):
+        return
+    prl.record(m.get("style"), value == 1, m.get("q", ""), m["content"])
+    m["rated"] = True
+
+
+if not ss.ask_msgs:
     st.markdown("**Try one of these:**")
     cols = st.columns(len(llm.SUGGESTED_QUESTIONS))
     for col, q in zip(cols, llm.SUGGESTED_QUESTIONS):
         if col.button(q, key=f"sugg_{q[:14]}", width="stretch"):
-            st.session_state.ask_msgs.append({"role": "user", "content": q})
+            ask(q)
             st.rerun()
 
-for m in st.session_state.ask_msgs:
+for i, m in enumerate(ss.ask_msgs):
     with st.chat_message(m["role"], avatar="🎓" if m["role"] == "assistant" else None):
         st.markdown(m["content"])
+        if m["role"] == "assistant" and m.get("style"):
+            st.feedback("thumbs", key=f"fb_{i}", on_change=rate, args=(i,), disabled=m.get("rated", False))
+
+if ss.ask_error:
+    question, message = ss.ask_error
+    st.error(f"**The Professor couldn't answer.** {message}")
+    if st.button("🔁 Try again", key="retry"):
+        ask(question)
+        st.rerun()
 
 prompt = st.chat_input("Ask about the game, the agent, or reinforcement learning…")
 if prompt:
-    st.session_state.ask_msgs.append({"role": "user", "content": prompt})
+    ask(prompt)
     st.rerun()
 
-if st.session_state.ask_msgs and st.session_state.ask_msgs[-1]["role"] == "user":
+if ss.ask_msgs and ss.ask_msgs[-1]["role"] == "user":
+    question = ss.ask_msgs[-1]["content"]
+    style = prl.choose_style()
+    extra = llm.question_context(question, expert_q)
+    full_context = context + ("\n\nHANDS IN THIS QUESTION (looked up in the agent's table):\n" + extra
+                              if extra else "")
+    failure = []
+
+    def answer():
+        try:
+            yield from llm.stream(provider, model, ss.ask_msgs, full_context, style=prl.style_prompt(style),
+                                  examples=prl.examples(), fallbacks=models, raise_errors=True)
+        except llm.LLMError as e:
+            failure.append(str(e))
+
     with st.chat_message("assistant", avatar="🎓"):
-        reply = st.write_stream(llm.stream(provider, model, st.session_state.ask_msgs, context))
-    st.session_state.ask_msgs.append({"role": "assistant", "content": reply})
+        reply = st.write_stream(answer())
+    if failure or not reply:
+        ss.ask_msgs.pop()                      # never keep a failed turn in the history sent to the model
+        ss.ask_error = (question, failure[0] if failure else "The model sent back an empty answer.")
+    else:
+        ss.ask_msgs.append({"role": "assistant", "content": reply, "style": style, "q": question})
     st.rerun()
 
-if st.session_state.ask_msgs and st.button("🗑️ Clear conversation"):
-    st.session_state.ask_msgs = []
+if ss.ask_msgs and st.button("🗑️ Clear conversation"):
+    ss.ask_msgs = []
+    ss.ask_error = None
     st.rerun()
+
+with st.expander("📈 How the Professor is learning from your ratings"):
+    st.caption("Every answer is written in one of a few teaching styles, picked by Thompson sampling, a "
+               "multi-armed bandit. Each 👍 or 👎 is a reward: styles students like get picked more often, "
+               "while less-tried ones still get the occasional chance. Liked answers are also shown to the "
+               "model as examples of a helpful reply.")
+    st.dataframe(
+        [{"Style": label, "👍": up, "👎": down, "Estimated 👍 rate": f"{rate_:.0%}"}
+         for label, up, down, rate_ in prl.stats()],
+        hide_index=True, width="stretch")
