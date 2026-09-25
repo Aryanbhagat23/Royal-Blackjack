@@ -257,11 +257,12 @@ with tabs[2]:
         rdf["o_hi"] = (rdf["Optimal"] + rdf["Optimal sd"]).clip(upper=100)
         names = [n for n in SERIES if n in set(rdf.Algorithm)]
         color = alt.Color("Algorithm:N", scale=alt.Scale(domain=names, range=[SERIES[n] for n in names]),
-                          legend=alt.Legend(orient="bottom", title=None))
+                          legend=alt.Legend(orient="bottom", title=None, columns=3, labelLimit=260))
 
         def race_chart(y, lo, hi, title, log=False, fmt=".2f"):
             scale = alt.Scale(type="log") if log else alt.Scale(zero=False)
-            base_ = alt.Chart(rdf).encode(x=alt.X("Hands:Q", title="Hands of experience", axis=alt.Axis(format="~s")),
+            base_ = alt.Chart(rdf).encode(x=alt.X("Hands:Q", title="Hands of experience (log scale)",
+                                                  scale=alt.Scale(type="log"), axis=alt.Axis(format="~s")),
                                           color=color)
             band = base_.mark_area(opacity=0.15).encode(y=alt.Y(f"{lo}:Q", scale=scale, title=title), y2=f"{hi}:Q")
             line = base_.mark_line(strokeWidth=2).encode(y=f"{y}:Q")
@@ -280,18 +281,19 @@ with tabs[2]:
             st.altair_chart(race_chart("Optimal", "o_lo", "o_hi", "%", fmt=".1f"), width="stretch")
         final = rdf.sort_values("Hands").groupby("Algorithm").last()
         table = pd.DataFrame({
-            "Hands": final["Hands"],
+            "Hands": [f"{h:,.0f}" for h in final["Hands"]],
             "Gap to perfect (¢ per $100)": [f"{r:.2f} ± {s:.2f}" for r, s in zip(final["Regret"], final["Regret sd"])],
             "Perfect decisions": [f"{o:.1f}% ± {s:.1f}" for o, s in zip(final["Optimal"], final["Optimal sd"])],
-        }).loc[[n for n in names if n in final.index]]
+        }, index=final.index).loc[[n for n in names if n in final.index]]
         st.dataframe(table, width="stretch")
         st.markdown(
             "**Reading it.** Monte Carlo beats the temporal-difference methods because a hand lasts a couple of "
             "moves and the reward comes at the end, so learning from the real result is unbiased; Q-learning and "
             "SARSA learn from their own estimates, which adds bias for no benefit here. The neural network has to "
             "approximate a table that only needs a few hundred entries. **Precision practice** spends the same "
-            "number of hands where the agent is still unsure and compares moves on identical cards, which is why "
-            "it closes the gap to perfect play fastest.")
+            "number of hands where the agent is still unsure and compares moves on identical cards. Once the base "
+            "strategy is decent it closes the gap to perfect play much faster; at very small budgets it doesn't "
+            "help yet, because it needs a reasonable strategy to play out the rest of each practice hand.")
 
 # =====================================================================
 # Rules & house edge

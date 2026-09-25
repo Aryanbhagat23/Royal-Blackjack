@@ -150,7 +150,8 @@ st.markdown(
     "arrives at the end, so learning from the true result is unbiased and simple; the temporal-difference methods "
     "learn from their own estimates, which adds noise for no gain here. The neural network has to approximate a "
     "table with only a few hundred entries, and trains about 50× slower per hand. **Precision practice** gets the "
-    "most out of the same number of hands by spending them where the agent is unsure."
+    "most out of the same number of hands by spending them where the agent is unsure, once it has a decent base "
+    "strategy to build on."
 )
 st.page_link("research.py", label="See the race in the Research Lab", icon="🔬")
 

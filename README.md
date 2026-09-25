@@ -119,7 +119,27 @@ as noise. It is a demonstration, not a business plan.
 
 ### Algorithms compared
 
-<!-- RACE -->
+The same game learned five ways and scored **exactly** (`python experiments.py race`), mean ± standard deviation
+over 3 seeds, dealer stands on 17:
+
+| Algorithm | Hands | Perfect first decisions | Gap to perfect play (per $100) |
+|---|---|---|---|
+| 🎯 **MC + precision practice** | 6M | **98.0% ± 0.5** | **2.4¢ ± 0.9** |
+| 🎲 Monte Carlo | 6M | 92.7% ± 0.9 | 8.8¢ ± 2.9 |
+| ⚡ Q-learning | 6M | 83.8% ± 1.7 | 234¢ ± 75 |
+| 🐢 SARSA | 6M | 80.4% ± 0.7 | 241¢ ± 88 |
+| 🧠 Deep Q-Network (numpy, no PyTorch) | 200k | 72.3% ± 4.4 | 420¢ ± 66 |
+
+With the same number of hands, precision practice (half self-play, half targeted practice) gets **3.6× closer to
+perfect play** than plain Monte Carlo. At a small budget it does not help: at 1.5M hands plain Monte Carlo was
+slightly ahead (gap 27¢ vs 40¢, within noise), because comparing moves needs a reasonable base strategy to play out
+the rest of the hand. It is a fine-tuning method, and that is where the shipped experts use it
+(`results/race_1500000_hands.json` has the small-budget run).
+
+Monte Carlo beats the temporal-difference methods because hands are short and the reward comes at the end, so
+learning from the true result is unbiased; Q-learning and SARSA bootstrap from their own estimates. The neural
+network approximates a table that only needs a few hundred entries while training ~50× slower per hand. Neural
+networks earn their keep when the state space is too large to tabulate.
 
 ## 🔬 For researchers
 

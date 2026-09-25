@@ -36,6 +36,7 @@ st.markdown("""
 .swatch .dots span { display: inline-block; width: 22px; height: 22px; border-radius: 50%; margin-right: 4px; border: 2px solid rgba(255,255,255,.3); }
 .swatch h4 { margin: 8px 0 2px; font-size: 17px; }
 .swatch p { margin: 0 0 10px; font-size: 12px; opacity: .8; }
+.feature { min-height: 236px; }
 .foot { text-align: center; color: var(--muted); font-size: 13px; margin: 40px 0 10px; border-top: 1px solid var(--border); padding-top: 18px; }
 </style>
 """, unsafe_allow_html=True)
