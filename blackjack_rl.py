@@ -214,8 +214,11 @@ def _natural(a, b):
 # Training
 # =========================================================
 
-def train(episodes=2_000_000, hit_soft17=False, Q=None, N=None, explore=0.5, progress=None):
-    """Precision Monte Carlo control. Pass Q and N to continue training. Returns Q (N is updated in place)."""
+def train(episodes=2_000_000, hit_soft17=False, Q=None, N=None, explore=0.5, progress=None, seed=None):
+    """Precision Monte Carlo control. Pass Q and N to continue training. Returns Q (N is updated in place).
+    Pass `seed` for a reproducible run."""
+    if seed is not None:
+        random.seed(seed)
     Q = {} if Q is None else Q
     N = {} if N is None else N
     rnd = random.random
@@ -255,11 +258,14 @@ def train(episodes=2_000_000, hit_soft17=False, Q=None, N=None, explore=0.5, pro
     return Q
 
 
-def evaluate(Q, hands=50_000, hit_soft17=False, random_unseen=False, policy=None):
-    """Play greedily (or with `policy(state, legal)`). Returns win/loss/tie rates and avg reward per hand."""
+def evaluate(Q, hands=50_000, hit_soft17=False, random_unseen=False, policy=None, seed=None):
+    """Play greedily (or with `policy(state, legal)`). Returns win/loss/tie rates, avg reward per hand,
+    and its standard error (`stderr`), so every simulated number can carry a margin of error."""
+    if seed is not None:
+        random.seed(seed)
     pol = policy or (lambda s, legal: greedy(Q, s, legal, random_unseen))
     wins = losses = ties = 0
-    total = 0.0
+    total = total_sq = 0.0
     for _ in range(hands):
         p1, p2, up, hole = _deal()
         pn, dn = _natural(p1, p2), _natural(up, hole)
@@ -268,11 +274,14 @@ def evaluate(Q, hands=50_000, hit_soft17=False, random_unseen=False, policy=None
         else:
             r = sum(_play_round(pol, up, hole, p1, p2, hit_soft17))
         total += r
+        total_sq += r * r
         wins += r > 0
         losses += r < 0
         ties += r == 0
+    mean = total / hands
+    var = max(total_sq / hands - mean * mean, 0.0)
     return {"win_rate": wins / hands, "loss_rate": losses / hands, "tie_rate": ties / hands,
-            "avg_reward": total / hands}
+            "avg_reward": mean, "stderr": math.sqrt(var / hands)}
 
 
 def learning_curve(total=200_000, checkpoints=10, eval_hands=20_000, hit_soft17=False, progress=None):
@@ -287,6 +296,179 @@ def learning_curve(total=200_000, checkpoints=10, eval_hands=20_000, hit_soft17=
         if progress:
             progress((k + 1) / checkpoints)
     return points
+
+
+# =========================================================
+# Precision refinement: targeted practice until every first decision is statistically settled
+# =========================================================
+# Random self-play gives rare hands (a pair of 4s against a 3, soft 16 against a 5) about 50x less
+# practice than common ones, and that is exactly where a Monte Carlo agent's mistakes live. Refinement
+# keeps learning from experience alone, but spends it where the agent is still unsure:
+#
+#   * exploring starts: practice hands are dealt directly into an unsettled first decision
+#   * paired comparisons: every legal move is tried against the *same* upcoming cards, so luck
+#     cancels out of the comparison and small differences show up with far fewer hands
+#   * a stopping rule: a decision is settled once the best move beats every other by more than
+#     `z` standard errors, or the remaining moves are shown to be within `tol` of it (a true tie)
+#
+# This is best-arm identification (a bandit problem) run inside Monte Carlo control. The exact solver
+# in solver.py is never consulted; it is only used afterwards to grade the result.
+
+def first_decisions():
+    """Every two-card first decision: (state, cards) with a representative pair of cards."""
+    out = []
+    for up in DEALER_COLS:
+        for t in range(5, 20):
+            hi = min(10, t - 2)
+            if hi * 2 == t:
+                hi -= 1
+            out.append(((t, up, False, True, 0), (hi, t - hi)))
+        for t in range(13, 21):
+            out.append(((t, up, True, True, 0), (11, t - 11)))
+        for v in range(2, 12):
+            out.append(((12 if v == 11 else 2 * v, up, v == 11, True, v), (v, v)))
+    return out
+
+
+def later_decisions():
+    """Every hit-or-stand decision after taking a card: (state, None). Hard 4-11 can't bust and hard 21
+    is automatic, so the real choices are hard 12-20 and soft 13-20."""
+    out = []
+    for up in DEALER_COLS:
+        for t in range(12, 21):
+            out.append(((t, up, False, False, 0), None))
+        for t in range(13, 21):
+            out.append(((t, up, True, False, 0), None))
+    return out
+
+
+def _play_from(policy, up, hole, total, soft, hs17, draw):
+    """Finish a hand that already has three or more cards (hit or stand only), then settle it."""
+    while True:
+        a = policy((total, up, soft > 0, False, 0), [0, 1])
+        if a == 1:
+            break
+        total, soft = _add(total, soft, draw(DRAW))
+        if total > 21:
+            return -1
+        if total == 21:
+            break
+    d, ds = _add(*_add(0, 0, up), hole)
+    while d < 17 or (hs17 and d == 17 and ds):
+        d, ds = _add(d, ds, draw(DRAW))
+    return 1 if d > 21 or total > d else -1 if total < d else 0
+
+
+def _paired_returns(Q, state, cards, hs17, legal, n_future=24):
+    """Play the same deal once per legal move, all against the same future cards. `cards` is the
+    starting two cards for a first decision, or None for a later hit-or-stand decision."""
+    up = state[1]
+    while True:
+        hole = random.choice(DRAW)
+        if up + hole != 21:
+            break
+    future = [random.choice(DRAW) for _ in range(n_future)]
+    out = {}
+    for a in legal:
+        it = iter(future)
+        draw = lambda _deck, it=it: next(it, None) or random.choice(DRAW)
+        forced = [a]
+
+        def pol(s, lg, forced=forced):
+            if forced:
+                return forced.pop()
+            return greedy(Q, s, lg)
+        if cards is None:
+            out[a] = _play_from(pol, up, hole, state[0], 1 if state[2] else 0, hs17, draw)
+        else:
+            out[a] = sum(_play_round(pol, up, hole, cards[0], cards[1], hs17, None, draw))
+    return out
+
+
+def _settled(stats, legal, tol, z):
+    means = {a: stats[a][1] for a in legal}
+    best = max(legal, key=means.get)
+    nb, mb, vb = stats[best][0], stats[best][1], stats[best][2] / max(stats[best][0] - 1, 1)
+    for a in legal:
+        if a == best:
+            continue
+        diff_n, diff_mean, diff_m2 = stats[("d", best, a)] if ("d", best, a) in stats else stats[("d", a, best)]
+        sign = 1 if ("d", best, a) in stats else -1
+        gap = sign * diff_mean
+        se = math.sqrt(diff_m2 / max(diff_n - 1, 1) / max(diff_n, 1))
+        if gap - z * se > 0 or gap + z * se < tol:
+            continue
+        return False
+    return nb >= 200
+
+
+def refine(Q, N, hit_soft17=False, budget=2_000_000, tol=0.001, z=3.0, batch=400, stats=None,
+           progress=None, seed=None):
+    """Targeted, paired Monte Carlo practice on unsettled decisions (see the notes above): every
+    two-card first decision and every later hit-or-stand decision.
+
+    `budget` is the number of practice deals. Q and N are updated in place (the refined estimate of a
+    first decision is the paired-sample mean). Returns (stats, report) where stats can be passed back in
+    to continue, and report = {"deals", "settled", "total"}."""
+    if seed is not None:
+        random.seed(seed)
+    stats = {} if stats is None else stats
+    decisions = first_decisions() + later_decisions()
+    deals = 0
+    unsettled = decisions
+    while deals < budget:
+        unsettled = []
+        for state, cards in decisions:
+            legal = legal_actions(state[3], bool(state[4]))
+            st = stats.get(state)
+            if st is None or not _settled(st, legal, tol, z):
+                unsettled.append((state, cards, legal))
+        if not unsettled:
+            break
+        for state, cards, legal in unsettled:
+            if state not in stats:
+                q0, n0 = Q.get(state, [0.0] * 4), N.get(state, [0] * 4)
+                stats[state] = {"base": (list(q0), list(n0))}
+            st = stats[state]
+            for _ in range(batch):
+                r = _paired_returns(Q, state, cards, hit_soft17, legal)
+                for a in legal:
+                    _welford(st.setdefault(a, [0, 0.0, 0.0]), r[a])
+                for i, a in enumerate(legal):
+                    for b in legal[i + 1:]:
+                        _welford(st.setdefault(("d", a, b), [0, 0.0, 0.0]), r[a] - r[b])
+            deals += batch
+            _write_back(Q, N, state, st, legal, tol, z)
+            if deals >= budget:
+                break
+        if progress:
+            progress(min(deals / budget, 1.0))
+    settled = sum(1 for state, _ in decisions
+                  if state in stats and _settled(stats[state], legal_actions(state[3], bool(state[4])), tol, z))
+    return stats, {"deals": deals, "settled": settled, "total": len(decisions)}
+
+
+def _write_back(Q, N, state, st, legal, tol, z):
+    """Pool the refined samples with what self-play already learned. Once the paired comparison has
+    settled a clear winner, the move it proved best is the one kept (it is far more precise)."""
+    q0, n0 = st["base"]
+    q = Q.setdefault(state, [0.0] * 4)
+    n = N.setdefault(state, [0] * 4)
+    for a in legal:
+        nr, mr = st[a][0], st[a][1]
+        q[a] = (n0[a] * q0[a] + nr * mr) / (n0[a] + nr) if n0[a] + nr else 0.0
+        n[a] = n0[a] + nr
+    paired_best = max(legal, key=lambda a: st[a][1])
+    if max(legal, key=q.__getitem__) != paired_best and _settled(st, legal, tol, z):
+        for a in legal:
+            q[a] = st[a][1]
+
+
+def _welford(acc, x):
+    acc[0] += 1
+    d = x - acc[1]
+    acc[1] += d / acc[0]
+    acc[2] += d * (x - acc[1])
 
 
 # =========================================================
@@ -412,9 +594,13 @@ def chart_letter(kind, total, up, hit_soft17=False):
 # Save / load
 # =========================================================
 
-def save_q(Q, path, N=None, hands=0):
+def save_q(Q, path, N=None, hands=0, refined=None):
+    """`refined` optionally records the precision-refinement run: {"deals", "settled", "total", ...}."""
+    data = {"version": Q_VERSION, "Q": Q, "N": N or {}, "hands": hands}
+    if refined:
+        data["refined"] = refined
     with open(path, "wb") as f:
-        pickle.dump({"version": Q_VERSION, "Q": Q, "N": N or {}, "hands": hands}, f)
+        pickle.dump(data, f)
 
 
 def load_bundle(path):
@@ -430,21 +616,48 @@ def load_q(path):
     return load_bundle(path)["Q"]
 
 
-if __name__ == "__main__":
-    import sys
+def _main():
+    import argparse
     import time
 
-    hands = int(sys.argv[1]) if len(sys.argv) > 1 else 2_000_000
+    ap = argparse.ArgumentParser(description="Train or refine the Blackjack agents.")
+    ap.add_argument("mode", choices=["train", "refine"], nargs="?", default="train",
+                    help="train: fresh Monte Carlo self-play. refine: targeted practice on the saved experts.")
+    ap.add_argument("budget", type=int, nargs="?", default=None,
+                    help="hands of self-play (train, default 2,000,000) or practice deals (refine, default 10,000,000)")
+    ap.add_argument("--seed", type=int, default=2024)
+    ap.add_argument("--tol", type=float, default=0.001, help="refine: moves this close in value count as a tie")
+    ap.add_argument("--z", type=float, default=3.0, help="refine: standard errors required to settle a decision")
+    args = ap.parse_args()
+
     for rule, hs17 in (("S17", False), ("H17", True)):
+        path = os.path.join(BASE_DIR, f"q_expert_{rule}.pkl")
         t0 = time.time()
-        Q, N = {}, {}
-        train(hands, hs17, Q, N)
-        save_q(Q, os.path.join(BASE_DIR, f"q_expert_{rule}.pkl"), N, hands)
-        g = grade(Q, N, hs17)
-        e = evaluate(Q, 200_000, hs17)
-        b = evaluate(None, 200_000, hs17, policy=basic_strategy_policy(hs17))
-        ties = sum(d["tie"] for d in g["disagreements"])
-        print(f"{rule}: {hands:,} hands in {time.time() - t0:.0f}s | matches basic strategy on "
-              f"{g['matches']}/{g['total']} ({g['matches'] / g['total']:.1%}), {ties} of the "
-              f"{len(g['disagreements'])} differences are statistical ties")
-        print(f"     agent {e['avg_reward'] * 100:+.2f} vs basic strategy {b['avg_reward'] * 100:+.2f} per $100")
+        if args.mode == "train":
+            hands = args.budget or 2_000_000
+            Q, N = {}, {}
+            train(hands, hs17, Q, N, seed=args.seed)
+            save_q(Q, path, N, hands)
+            info = f"{hands:,} hands"
+        else:
+            bundle = load_bundle(path)
+            Q, N, hands = bundle["Q"], bundle["N"], bundle["hands"]
+            budget = args.budget or 10_000_000
+            _, report = refine(Q, N, hs17, budget, tol=args.tol, z=args.z, seed=args.seed,
+                               progress=lambda p: print(f"\r  {rule} refining... {p:.0%}", end="", flush=True))
+            report.update(tol=args.tol, z=args.z, seed=args.seed)
+            save_q(Q, path, N, hands, refined=report)
+            print()
+            info = f"{report['deals']:,} practice deals, {report['settled']}/{report['total']} decisions settled"
+        try:
+            import solver
+            r = solver.regret(solver.greedy_policy(robust_q(Q, N)), solver.AGENT_RULES[rule])
+            exact = (f"exact EV {r['policy_ev'] * 100:+.4f} vs perfect {r['optimal_ev'] * 100:+.4f} per $100 "
+                     f"(gap {r['regret'] * 10000:.2f}¢), perfect on {r['optimal_share']:.1%} of first decisions")
+        except ImportError:
+            exact = ""
+        print(f"{rule}: {info} in {time.time() - t0:.0f}s | {exact}")
+
+
+if __name__ == "__main__":
+    _main()

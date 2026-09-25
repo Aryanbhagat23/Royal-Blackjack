@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software or its results, please cite it as below."
+title: "Royal Blackjack: Monte Carlo reinforcement learning for Blackjack, graded against an exact solver"
+authors:
+  - given-names: Aryan
+    family-names: Bhagat
+license: MIT
+repository-code: "https://github.com/Aryanbhagat23/Royal-Blackjack"
+keywords:
+  - reinforcement learning
+  - Monte Carlo control
+  - blackjack
+  - best-arm identification
+  - exact solver
+  - Gymnasium
