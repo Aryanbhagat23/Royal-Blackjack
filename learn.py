@@ -2,7 +2,8 @@
 
 import streamlit as st
 
-from shared import LEVELS, page_header
+import algorithms as alg
+from shared import LEVELS, exact_baselines, exact_grade, get_bundles, page_header
 
 page_header("🎓 How the AI Works", "Reinforcement learning, explained with the Blackjack agent in this app.")
 
@@ -74,30 +75,49 @@ st.markdown(
     "and it never hits a hard 20. Doubles or splits tried fewer than 30 times are never recommended."
 )
 
-st.markdown("### 5. Proof that it learned")
-st.markdown("Every result is measured against three baselines, so “it plays well” means something:")
+st.markdown("### 5. Proof that it learned: grading against the exact answer")
+_g, _rk, _base = exact_grade("expert", "S17"), exact_grade("rookie", "S17"), exact_baselines("S17")
+_ref = get_bundles()[("expert", "S17")].get("refined")
 st.markdown(
-    "| Player | Money per $100 | What it is |\n|---|---|---|\n"
-    "| 🎲 Random play | **−$43** | picks legal moves at random |\n"
-    "| 📏 Simple rule | **−$5.54** | no learning at all: copy the dealer, hit until 17 |\n"
-    "| 📘 Basic strategy chart | **−$0.48** | the best a non-counting player can do |\n"
-    "| 🤖 This agent (30M hands) | **−$0.43** | learned from wins and losses alone |\n"
-    "| 🧮 Counting agent | **+$0.60** | per $100 wagered, the only one that beats the house |\n"
+    "Blackjack is small enough that the *true* value of every move can be calculated exactly, by working "
+    "through every card that could come next. The agent never sees that calculation. It is only used as the "
+    "examiner, so “it plays well” is measured, not guessed. Against a dealer who stands on 17:"
 )
-st.caption("The simple rule is the important one: it shows how much of the gap is closed by learning rather "
-           "than by just following an obvious heuristic.")
 st.markdown(
-    f"- **The Expert** ({LEVELS['expert']:,} hands) matches textbook basic strategy on about 97% of decisions, "
-    "and every difference is a statistical tie.\n"
-    f"- **The Rookie** ({LEVELS['rookie']:,} hands) makes clear mistakes: more experience means better play.\n"
-    "- Agents trained against different dealer rules learned **different strategies**.\n"
-    "- The Expert loses only about **$0.42 per $100**, as good as the official strategy chart. Random play "
-    "loses about $43. That small loss is the house edge, which no strategy can beat without counting cards."
+    "| Player | Money per $100 (exact) | What it is |\n|---|---|---|\n"
+    "| 🎲 Random play | **about −$43** | picks legal moves at random (simulated) |\n"
+    f"| 📏 Simple rule | **{_base['Simple rule (stand on 17)']:+.2f}** | no learning: copy the dealer, hit until 17 |\n"
+    f"| 🧢 Rookie agent ({LEVELS['rookie']:,} hands) | **{_rk['policy_ev'] * 100:+.2f}** | too little experience |\n"
+    f"| 📘 Published 6-deck chart | **{_base['Basic strategy chart (6-deck)']:+.3f}** | what professionals memorise |\n"
+    f"| 🤖 Expert agent | **{_g['policy_ev'] * 100:+.3f}** | learned from wins and losses alone |\n"
+    f"| ✨ Perfect play | **{_g['optimal_ev'] * 100:+.3f}** | the mathematical best, i.e. the house edge |\n"
 )
-st.page_link("lab.py", label="See all of this live in the AI Lab", icon="🧪")
+st.markdown(
+    f"- The Expert picks a provably perfect move in **{_g['optimal_share']:.1%}** of the 330 two-card decisions, "
+    f"and gives up only **{_g['regret'] * 10000:.2f}¢ per $100** compared with perfect play.\n"
+    "- Earlier versions of this page said the agent beat the strategy chart (−$0.43 vs −$0.48). Those were "
+    "simulations with a margin of error of about ±$0.18, so the difference was noise. Exact grading settles it.\n"
+    "- Even perfect play loses a little. That is the house edge, which no strategy beats without counting cards."
+)
+
+st.markdown("### 6. Precision practice: fixing the last mistakes")
+st.markdown(
+    "The exact grade showed where the agent's remaining mistakes were: **rare hands**, like a pair of 4s against "
+    "a 3. Random self-play gives them about 50× less practice than common hands like 16 against a 10. The fix is "
+    "still pure reinforcement learning, just smarter about where to spend experience:\n\n"
+    "- **Exploring starts:** practice hands are dealt straight into decisions the agent is unsure about.\n"
+    "- **Paired comparisons:** every move is tried against the *same* upcoming cards, so luck cancels out and "
+    "small differences show up with far fewer hands.\n"
+    "- **Knowing when to stop:** a decision is settled once the best move is ahead by 3 standard errors, or the "
+    "moves are proven to be within 0.1¢ of each other (a genuine tie).\n"
+)
+if _ref:
+    st.markdown(f"After {_ref['deals']:,} practice deals, {_ref['settled']} of {_ref['total']} decisions were "
+                "settled, and the gap to perfect play fell about 20-fold.")
+st.page_link("research.py", label="See every decision graded in the Research Lab", icon="🔬")
 st.page_link("card_counter.py", label="Or meet the counting agent that beats the house", icon="🧮")
 
-st.markdown("### 6. The counting agent: beating the house")
+st.markdown("### 7. The counting agent: beating the house")
 st.markdown(
     "The base agent trains on an endless deck, so it can never know which cards are gone. A second agent trains "
     "on a real 6-deck shoe with the **Hi-Lo true count** added to its state, and learns two things:\n\n"
@@ -112,30 +132,39 @@ st.markdown(
 )
 st.page_link("card_counter.py", label="Open the Card Counter", icon="🧮")
 
-st.markdown("### 7. Four algorithms, same game")
+st.markdown("### 8. Five algorithms, same game")
+try:
+    _race = alg.load_race()
+except (OSError, ValueError):
+    _race = None
+if _race:
+    _rows = ["| Algorithm | Perfect decisions | Gap to perfect (¢ per $100) |", "|---|---|---|"]
+    for _name, _pts in _race.items():
+        _p = _pts[-1]
+        if "regret_100" in _p:
+            _rows.append(f"| {_name} ({_p['hands']:,} hands) | {_p['optimal']:.1%} | {_p['regret_100'] * 100:.2f} |")
+    st.markdown("The same Blackjack learned five ways, averaged over several random seeds and graded exactly:\n\n"
+                + "\n".join(_rows))
 st.markdown(
-    "The same Blackjack was learned four ways and scored identically:\n\n"
-    "| Algorithm | Matches the chart | Per $100 |\n|---|---|---|\n"
-    "| 🎲 Monte Carlo (this project) | **92%** | −0.8 |\n"
-    "| ⚡ Q-learning | 82% | −1.5 |\n"
-    "| 🐢 SARSA | 82% | −3.0 |\n"
-    "| 🧠 Deep Q-Network (numpy, from scratch) | 75% | −6.6 |\n\n"
-    "Monte Carlo wins because a Blackjack hand lasts two or three moves and the reward arrives at the end, so "
-    "waiting for the true result is unbiased and simple. Q-learning and SARSA learn from their own estimates, "
-    "which adds noise for no gain here. The neural network has to approximate a table with only a few hundred "
-    "entries, and trains about 50× slower per hand — neural networks pay off when the game is far too big to "
-    "tabulate, like Atari or Go."
+    "Monte Carlo beats Q-learning and SARSA because a Blackjack hand lasts two or three moves and the reward "
+    "arrives at the end, so learning from the true result is unbiased and simple; the temporal-difference methods "
+    "learn from their own estimates, which adds noise for no gain here. The neural network has to approximate a "
+    "table with only a few hundred entries, and trains about 50× slower per hand. **Precision practice** gets the "
+    "most out of the same number of hands by spending them where the agent is unsure, once it has a decent base "
+    "strategy to build on."
 )
-st.page_link("lab.py", label="See the race in the AI Lab", icon="🔬")
+st.page_link("research.py", label="See the race in the Research Lab", icon="🔬")
 
-st.markdown("### 8. What isn't reinforcement learning")
+st.markdown("### 9. What isn't reinforcement learning")
 st.markdown("This is worth being clear about, because people assume the opposite:")
 st.markdown(
     "- **The Professor's explanations** are rule-based sentences written around the agent's decision.\n"
     "- **Bust percentages** come from probability and Monte Carlo simulation of the shoe.\n"
     "- **The Hi-Lo card count** is a standard formula; the base agent doesn't use it.\n"
-    "- **The optional chat** (Ask the Professor) is a local language model through Ollama. It does not decide "
-    "anything: it is handed the agent's real learned values and asked to put them in plain words."
+    "- **The exact solver** is dynamic programming, not learning. It is the examiner, never the teacher.\n"
+    "- **The optional chat** (Ask the Professor) is a language model (Ollama or Gemini). It does not decide "
+    "anything: it is handed the agent's real learned values and asked to put them in plain words. Its 👍/👎 "
+    "ratings do drive a small bandit that learns which teaching style students prefer."
 )
 
 with st.expander("❓ Common questions"):
@@ -144,9 +173,9 @@ with st.expander("❓ Common questions"):
         "learning from the true final result is simple and unbiased.\n\n"
         "**Is it model-free?** Yes. The agent never sees card probabilities or dealer rules; it learns only "
         "from outcomes.\n\n"
-        "**Limitations?** Training uses an endless deck (no card memory), only one split per hand is allowed, "
-        "insurance and surrender aren't implemented, and a lookup table only works because Blackjack has few states. Bigger games "
-        "need neural networks (Deep Q-Learning).\n\n"
-        "**Next steps?** Add the true count to the state and learn bet sizing (a counting agent can beat the house), "
-        "and compare against Q-learning, SARSA, and a neural network."
+        "**Limitations?** The base agents use an endless deck (no card memory), only one split per hand is allowed, "
+        "and insurance isn't implemented. A lookup table only works because Blackjack has few states; bigger games "
+        "need neural networks.\n\n"
+        "**Can I train my own agent?** Yes: `blackjack_env.py` is a Gymnasium environment with double and split, "
+        "and `solver.regret()` grades any strategy exactly. See the Research Lab's Data tab."
     )

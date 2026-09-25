@@ -3,9 +3,9 @@
 import pandas as pd
 import streamlit as st
 
-import algorithms as alg
 import blackjack_rl as rl
-from shared import DEALERS, LEVELS, baselines, get_agents, get_bundles, page_header, value_bars
+from shared import (DEALERS, LEVELS, baselines, exact_grade, get_agents, get_bundles, page_header,
+                    value_bars)
 
 AGENTS = get_agents()
 BUNDLES = get_bundles()
@@ -19,8 +19,8 @@ rule = st.segmented_control("Dealer rules", list(DEALERS), default="S17", key="l
                             format_func=lambda k: f"{DEALERS[k]['emoji']} {DEALERS[k]['name']} ({DEALERS[k]['rule']})") or "S17"
 hs17 = DEALERS[rule]["hit_soft17"]
 
-t0, t1, t2, t3, t4, t5 = st.tabs(["📐 Accuracy check", "📋 Strategy charts", "📈 Learning curve",
-                                  "🔍 Q-value explorer", "⚔️ Tournament", "🔬 Algorithm race"])
+t0, t1, t2, t3, t4 = st.tabs(["📐 Accuracy check", "📋 Strategy charts", "📈 Learning curve",
+                              "🔍 Q-value explorer", "⚔️ Tournament"])
 
 
 def chart_df(level, kind):
@@ -40,31 +40,20 @@ def chart_df(level, kind):
 
 # ---------------- Accuracy check ----------------
 with t0:
-    st.markdown("How close did each agent get to **basic strategy**, the mathematically correct way to play that "
-                "professionals memorize? Every two-card decision is compared: 150 hard totals, 80 soft totals, and "
-                "100 pairs.")
-    grades = {lvl: rl.grade(BUNDLES[(lvl, rule)]["Q"], BUNDLES[(lvl, rule)]["N"], hs17) for lvl in LEVELS}
+    st.markdown("How close is each agent to **perfect play**? The exact solver works out the true value of every "
+                "move, so each of the 330 two-card decisions can be graded, and the agent's long-run result "
+                "computed exactly.")
     cols = st.columns(2)
     for col, lvl in zip(cols, ("expert", "rookie")):
-        g = grades[lvl]
-        ties = sum(d["tie"] for d in g["disagreements"])
-        real = len(g["disagreements"]) - ties
-        col.metric(f"{LEVEL_NAMES[lvl]} · {LEVELS[lvl]:,} hands", f"{g['matches'] / g['total']:.1%} match",
-                   f"{real} real mistakes" if real else "0 real mistakes", delta_color="inverse" if real else "off")
-        col.caption(f"{g['matches']} of {g['total']} decisions match the chart. {ties} of the differences are "
-                    "statistical ties (moves worth almost exactly the same).")
-    exp = grades["expert"]
-    if exp["disagreements"]:
-        with st.expander(f"🔍 See the Expert's {len(exp['disagreements'])} differences from the chart"):
-            names = {"hard": "Hard", "soft": "Soft", "pair": "Pair of"}
-            rows = [{"Hand": f"{names[d['kind']]} {('A' if d['total'] == 11 else d['total']) if d['kind'] == 'pair' else d['total']}",
-                     "Dealer": "A" if d["up"] == 11 else d["up"], "Agent plays": d["agent"], "Chart says": d["chart"],
-                     "Value gap (per $1)": d["gap"], "Verdict": "🤝 statistical tie" if d["tie"] else "❌ mistake"}
-                    for d in exp["disagreements"]]
-            st.dataframe(pd.DataFrame(rows).style.format({"Value gap (per $1)": "{:+.3f}"}), hide_index=True, width="stretch")
-            st.caption("The value gap is how much the agent thinks its choice beats the chart's. Tiny gaps are "
-                       "within measurement noise. Some also come from the chart being built for 6 decks, while the "
-                       "agent trains on an endless deck.")
+        g = exact_grade(lvl, rule)
+        wrong = sum(d["cost"] > 1e-12 for d in g["decisions"])
+        col.metric(f"{LEVEL_NAMES[lvl]} · {LEVELS[lvl]:,} hands", f"{g['optimal_share']:.1%} perfect",
+                   f"{g['regret'] * 10000:.2f}¢ per $100 from perfect play", delta_color="off")
+        col.caption(f"{len(g['decisions']) - wrong} of {len(g['decisions'])} first decisions are perfect moves. "
+                    f"Its strategy is worth exactly {g['policy_ev'] * 100:+.3f} per $100 bet, against "
+                    f"{g['optimal_ev'] * 100:+.3f} for perfect play.")
+    st.page_link("research.py", label="See every decision, the method, and the algorithm race in the Research Lab",
+                 icon="🔬")
 
     st.markdown("#### 💰 Does it actually play as well?")
     hands = st.select_slider("Hands to simulate", [100_000, 300_000, 1_000_000], value=300_000)
@@ -74,13 +63,14 @@ with t0:
             b = rl.evaluate(None, hands, hs17, policy=rl.basic_strategy_policy(hs17))
             s_rule = rl.evaluate(None, hands, hs17, policy=rl.simple_rule_policy())
             r = rl.evaluate({}, min(hands, 100_000), hs17, random_unseen=True)
-        margin = 2 * 1.15 / hands ** 0.5 * 100
+        margin = 1.96 * e["stderr"] * 100
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("🎩 Expert agent", f"{e['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
         c2.metric("📘 Basic strategy chart", f"{b['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
         c3.metric("📏 Simple rule (stand on 17)", f"{s_rule['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
         c4.metric("🎲 Random play", f"{r['avg_reward'] * 100:+.2f}", "per $100 bet", delta_color="off")
-        st.caption(f"Margin of error about ±{margin:.2f} per $100. Even perfect play loses a little: that's the house edge.")
+        st.caption(f"Simulated, so each number carries a 95% margin of error of about ±{margin:.2f} per $100: gaps "
+                   "smaller than that are noise. The Research Lab computes these values exactly.")
 
 
 # ---------------- Strategy charts ----------------
@@ -203,65 +193,3 @@ with t4:
         champ = df.iloc[0]
         st.success(f"🏆 Champion: **{champ['Agent']}** against {champ['Dealer']} "
                    f"({champ['Return per $100']:+.2f} per $100).")
-
-
-# ---------------- Algorithm race ----------------
-with t5:
-    st.markdown("Blackjack, learned four different ways. Same game, same scoring: how often each agent matches "
-                "the official strategy chart, and how much money it makes per $100 bet.")
-    cards = [
-        ("🎲 Monte Carlo", "This project's method. Waits until the hand ends, then learns from the actual result. "
-                           "Unbiased but has to finish a hand before learning anything."),
-        ("⚡ Q-learning", "Learns after every single move, using its own best guess about the next situation "
-                         "(*bootstrapping*). Off-policy: it learns the best strategy while exploring."),
-        ("🐢 SARSA", "Same as Q-learning, but it learns toward the move it actually takes next, including "
-                     "exploratory ones. On-policy, so it ends up a bit more cautious."),
-        ("🧠 Deep Q-Network", "Q-learning with a small neural network instead of a lookup table, written from "
-                              "scratch with numpy: 24 inputs, two hidden layers, replay buffer, target network."),
-    ]
-    for col, (title, desc) in zip(st.columns(4, gap="medium"), cards):
-        col.markdown(f'<div class="feature" style="min-height:190px"><h3 style="font-size:18px">{title}</h3>'
-                     f'<p>{desc}</p></div>', unsafe_allow_html=True)
-
-    try:
-        race = alg.load_race()
-    except (OSError, ValueError):
-        race = None
-    if race is None:
-        st.info("No saved race yet. Run `python algorithms.py` to generate one.")
-    else:
-        rows = []
-        for name, points in race.items():
-            for p in points:
-                rows.append({"Algorithm": name, "Hands trained": p["hands"],
-                             "Chart match %": p["match"] * 100, "Per $100": p["per_100"]})
-        rdf = pd.DataFrame(rows)
-        c1, c2 = st.columns(2, gap="large")
-        with c1:
-            st.markdown("**Accuracy as training goes on**")
-            st.line_chart(rdf.pivot(index="Hands trained", columns="Algorithm", values="Chart match %"), height=300)
-        with c2:
-            st.markdown("**Money won or lost per $100 bet**")
-            money = rdf.pivot(index="Hands trained", columns="Algorithm", values="Per $100")
-            base = baselines(hs17)
-            money["Basic strategy (best possible)"] = base["Basic strategy chart"]
-            money["Simple rule (stand on 17)"] = base["Simple rule (stand on 17)"]
-            st.line_chart(money, height=300)
-            st.caption("The two flat lines are the references: the best a non-counting player can do, and the "
-                       "simplest model that just copies the dealer.")
-        final = (rdf.sort_values("Hands trained").groupby("Algorithm").last()
-                 .sort_values("Chart match %", ascending=False))
-        st.dataframe(final.style.format({"Chart match %": "{:.1f}%", "Per $100": "{:+.2f}",
-                                         "Hands trained": "{:,.0f}"}), width="stretch")
-        best = final.index[0]
-        st.success(f"🏆 **{best}** ends up closest to perfect play on this game.")
-        st.markdown(
-            "**Why Monte Carlo wins here:** a Blackjack hand is over in a couple of moves and the reward comes "
-            "at the very end, so waiting for the true result is both simple and unbiased. Q-learning and SARSA "
-            "learn from their own estimates, which adds bias and noise for no benefit when hands are this short. "
-            "The neural network has to *approximate* a table that only needs a few hundred entries, so it trades "
-            "exactness for a generalisation it doesn't need — and it trains roughly 50× slower per hand. "
-            "Neural networks earn their keep when the state space is far too big to tabulate, like Atari or Go."
-        )
-    st.caption("Note: when a learner splits a pair, the two hands are played out by the trained expert, so all "
-               "four are compared on the same terms.")

@@ -4,10 +4,9 @@ and that learns from 👍 / 👎 which teaching style works best (see professor_
 import streamlit as st
 
 import algorithms as alg
-import blackjack_rl as rl
 import llm
 import professor_rl as prl
-from shared import DEALERS, baselines, get_agents, get_bundles, page_header
+from shared import exact_baselines, exact_grade, get_agents, page_header
 
 page_header("💬 Ask the Professor",
             "Ask anything about Blackjack or the reinforcement learning behind it, in plain language.")
@@ -50,13 +49,12 @@ provider, _, models = chosen
 model = st.selectbox("Model", models, index=models.index(llm.default_model(provider, models)))
 
 # ---- facts handed to the model so it can't invent numbers ----
-bundle = get_bundles()[("expert", "S17")]
-grade = rl.grade(bundle["Q"], bundle["N"], False)
+grade = exact_grade("expert", "S17")
 try:
     race = alg.load_race()
 except (OSError, ValueError):
     race = None
-context = llm.project_context(grade=grade, baselines=baselines(False), race=race)
+context = llm.project_context(grade=grade, baselines=exact_baselines("S17"), race=race)
 expert_q = get_agents()[("expert", "S17")]
 
 with st.expander("🔍 What the model is told before it answers"):

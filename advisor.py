@@ -3,6 +3,7 @@
 import streamlit as st
 
 import blackjack_rl as rl
+import solver
 from shared import (DEALERS, LEVELS, bust_chance, dealer_bust_chance, explain, get_agents, make_card,
                     page_header, render_html, strategy_card_html, theme, value_bars)
 
@@ -113,6 +114,16 @@ else:
             f'<div class="small">Recommended by the RL agent ({LEVELS["expert"]:,} hands of training)</div></div>',
             unsafe_allow_html=True,
         )
+        state = rl.get_state(hand, up, can_double, splittable)
+        legal = rl.legal_actions(can_double, splittable)
+        _, exact = solver.best_action(state, solver.AGENT_RULES[rule], legal)
+        perfect = solver.NAMES[max(exact, key=exact.get)]
+        gap = (max(exact.values()) - exact[rl.ACTIONS.index(best)]) * 100
+        if perfect == best or gap < 0.1:
+            st.caption(f"✔️ Checked against the exact solver: perfect play agrees ({best}, worth "
+                       f"{exact[rl.ACTIONS.index(best)]:+.3f} per $1).")
+        else:
+            st.caption(f"⚖️ The exact solver prefers **{perfect}** here by {gap:.2f}¢ per $1, a near-tie.")
 
         c1, c2 = st.columns(2)
         with c1:

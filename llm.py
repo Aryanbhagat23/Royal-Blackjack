@@ -61,8 +61,9 @@ SYSTEM_PROMPT = """You are "the Professor", a friendly Blackjack and reinforceme
 student project called Royal Blackjack.
 
 The app contains a reinforcement learning agent that taught itself Blackjack by playing 30 million hands against \
-itself using Monte Carlo control. It matches published basic strategy on 96.7% of decisions. A second agent counts \
-cards and beats the house edge.
+itself using Monte Carlo control, then refined its rare decisions with targeted "precision practice". It is graded \
+against an exact solver that computes the true value of every move; CONTEXT has the current numbers. A second agent \
+counts cards and beats the house edge.
 
 Rules for your answers:
 - The numbers in CONTEXT come from the trained agent and from simulations. Treat them as the truth and build your \
@@ -379,7 +380,8 @@ def _soften(gen):
 # ---------------------------------------------------------
 
 def project_context(grade=None, baselines=None, race=None):
-    """Facts about the project itself, for general questions."""
+    """Facts about the project itself, for general questions. `grade` is solver.regret() of the expert and
+    `baselines` exact money per $100 by strategy."""
     lines = ["The agent learns with Monte Carlo control: after each hand every (state, action) it used is moved "
              "toward the money that hand actually won, with step size 1/N so values are running averages.",
              "State = (player total, dealer up card, usable ace, can double, pair value). Actions = hit, stand, "
@@ -387,20 +389,25 @@ def project_context(grade=None, baselines=None, race=None):
              "Exploration: one random exploring move per hand, and only decisions from that move onward are "
              "learned from."]
     if grade:
-        lines.append(f"The expert agent matches the published basic strategy chart on {grade['matches']}/"
-                     f"{grade['total']} two-card decisions ({grade['matches'] / grade['total']:.1%}), and every "
-                     f"difference is a statistical tie (no real mistakes).")
+        lines.append(f"Exact grade (solver, dealer stands on 17): the expert agent picks a perfect move on "
+                     f"{grade['optimal_share']:.1%} of the 330 two-card decisions. Its strategy is worth exactly "
+                     f"{grade['policy_ev'] * 100:+.3f} per $100 bet versus {grade['optimal_ev'] * 100:+.3f} for "
+                     f"perfect play, a gap of {grade['regret'] * 10000:.2f} cents per $100.")
+        lines.append("Precision practice: rare hands got ~50x less random practice, so the agent then practised "
+                     "unsettled decisions directly (exploring starts), compared every move on the same future cards "
+                     "(paired comparisons), and stopped once the best move was 3 standard errors ahead.")
     if baselines:
-        lines.append("Money per $100 bet: " + ", ".join(f"{k} {v:+.2f}" for k, v in baselines.items())
-                     + ". The trained agent is about -0.43 and the card-counting agent is about +0.60 per $100 "
+        lines.append("Exact money per $100 bet: " + ", ".join(f"{k} {v:+.3f}" for k, v in baselines.items())
+                     + ". Random play loses about $43 per $100. The card-counting agent makes about +0.60 per $100 "
                        "wagered.")
     if race:
         parts = []
         for name, rows in race.items():
-            if rows:
-                parts.append(f"{name} {rows[-1]['match']:.0%}")
+            if rows and "optimal" in rows[-1]:
+                parts.append(f"{name} {rows[-1]['optimal']:.0%} perfect decisions, "
+                             f"{rows[-1].get('regret_100', 0) * 100:.2f} cents per $100 from perfect")
         if parts:
-            lines.append("Algorithm comparison (match with the strategy chart): " + ", ".join(parts)
+            lines.append("Algorithm comparison, same hand budget, exact scoring: " + "; ".join(parts)
                          + ". Monte Carlo wins because hands are short and the reward is terminal, so waiting for "
                            "the true result is unbiased; the neural network approximates a table that only needs a "
                            "few hundred entries and trains ~50x slower per hand.")
@@ -487,7 +494,7 @@ def parse_hands(question, limit=2):
 
 
 def question_context(question, Q, hit_soft17=False):
-    """Look up any hand the question mentions in the agent's own table, plus the textbook chart."""
+    """Look up any hand the question mentions in the agent's own table, the exact solver and the chart."""
     lines = []
     names = {"H": "hit", "S": "stand", "D": "double", "P": "split"}
     for cards, up in parse_hands(question):
@@ -499,6 +506,16 @@ def question_context(question, Q, hit_soft17=False):
         desc = f"pair of {cards[0]['rank']}s" if pair else f"{kind} {total} ({' + '.join(c['rank'] for c in cards)})"
         line = (f"For a {desc} against a dealer {up_name}: the trained agent picks {best.upper()}. Expected value "
                 "per $1 bet: " + ", ".join(f"{a} {v:+.3f}" for a, v in values.items()) + ".")
+        try:
+            import solver
+            state = rl.get_state(cards, up, True, pair)
+            exact = solver.action_values(state, solver.AGENT_RULES["H17" if hit_soft17 else "S17"])
+            perfect = max(exact, key=exact.get)
+            line += (f" Exact values from the solver (the ground truth): "
+                     + ", ".join(f"{solver.NAMES[a]} {v:+.4f}" for a, v in exact.items())
+                     + f", so perfect play is {solver.NAMES[perfect].upper()}.")
+        except (ImportError, KeyError):
+            pass
         try:
             letter = rl.chart_letter(kind, cards[0]["value"] if pair else total, up["value"], hit_soft17)
             line += f" The published basic strategy chart says {names[letter].upper()}."

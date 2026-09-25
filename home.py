@@ -3,10 +3,10 @@
 import streamlit as st
 
 import blackjack_rl as rl
-from shared import LEVELS, THEMES, expert_label, get_bundles, render_html, scene_css, theme
+from shared import LEVELS, THEMES, exact_grade, expert_label, get_bundles, render_html, scene_css, theme
 
 _b = get_bundles()[("expert", "S17")]  # loads (or trains) the agents on first launch
-_grade = rl.grade(_b["Q"], _b["N"])
+_grade = exact_grade("expert", "S17")
 t = theme()
 
 from shared import THEMES as _T
@@ -36,6 +36,7 @@ st.markdown("""
 .swatch .dots span { display: inline-block; width: 22px; height: 22px; border-radius: 50%; margin-right: 4px; border: 2px solid rgba(255,255,255,.3); }
 .swatch h4 { margin: 8px 0 2px; font-size: 17px; }
 .swatch p { margin: 0 0 10px; font-size: 12px; opacity: .8; }
+.feature { min-height: 236px; }
 .foot { text-align: center; color: var(--muted); font-size: 13px; margin: 40px 0 10px; border-top: 1px solid var(--border); padding-top: 18px; }
 </style>
 """, unsafe_allow_html=True)
@@ -97,8 +98,9 @@ with right:
 # ---------------- Results strip ----------------
 
 stats = [(expert_label(), "hands of self-play"),
-         (f"{_grade['matches'] / _grade['total']:.0%}", "match with the pros' strategy chart"),
-         ("−$43 → −$0.42", "loss per $100: random vs. trained"), (str(len(THEMES)), "casino themes")]
+         (f"{_grade['optimal_share']:.1%}", "of decisions provably perfect"),
+         (f"{_grade['regret'] * 10000:.2f}¢", "per $100 from perfect play, exactly"),
+         ("−$43 → " + f"−${-_grade['policy_ev'] * 100:.2f}", "loss per $100: random vs. trained")]
 for col, (big, small) in zip(st.columns(4), stats):
     col.markdown(f'<div class="stat"><b>{big}</b><span>{small}</span></div>', unsafe_allow_html=True)
 
@@ -109,14 +111,18 @@ st.markdown('<div class="section">Choose your game</div><div class="section-sub"
             unsafe_allow_html=True)
 FEATURES = [
     ("table.py", "🎰", "Casino Table", "Chips, a 6-deck shoe, AI players, and the Professor grading every move."),
+    ("trainer.py", "🎯", "Strategy Trainer",
+     "Drills scored against perfect play. See what each mistake costs, and missed hands come back for review."),
     ("multiplayer.py", "👥", "Multiplayer", "Create a room, share the code, and play with friends on their own devices."),
     ("advisor.py", "🧭", "Casino Advisor", "At a real table? Tap your cards and get the best move instantly."),
+    ("research.py", "🔬", "Research Lab",
+     "Exact grading against a solver, a five-algorithm race over seeds, a house-edge calculator, and open data."),
     ("lab.py", "🧪", "AI Lab", "Watch the AI learn, compare agents, explore Q-values, run tournaments."),
     ("card_counter.py", "🧮", "Card Counter",
      "The agent that learns what each count is worth, bets accordingly, and actually beats the house edge."),
     ("learn.py", "🎓", "How the AI Works", "States, actions, rewards, and Monte Carlo control, explained simply."),
 ]
-row1, row2 = st.columns(3, gap="medium"), st.columns(3, gap="medium")
+row1, row2 = st.columns(4, gap="medium"), st.columns(4, gap="medium")
 for col, (page, icon, title, text) in zip(list(row1) + list(row2), FEATURES):
     with col:
         st.markdown(f'<div class="feature"><div class="ico">{icon}</div><h3>{title}</h3><p>{text}</p></div>',
@@ -133,8 +139,9 @@ steps = [
     ("1", "🎲 Play", "The agent plays a hand. Early on it explores by choosing moves at random."),
     ("2", "🏆 Get a reward", "At the end of the hand it gets +1 for a win, −1 for a loss, or 0 for a push."),
     ("3", "📈 Improve", "It updates its estimate of every move it made, then plays again, 30 million times."),
+    ("4", "🎯 Practise", "It drills the rare hands it's still unsure about, comparing every move on the same cards."),
 ]
-for col, (n, title, text) in zip(st.columns(3, gap="medium"), steps):
+for col, (n, title, text) in zip(st.columns(4, gap="medium"), steps):
     col.markdown(f'<div class="step"><div class="n">{n}</div><h4>{title}</h4><p>{text}</p></div>', unsafe_allow_html=True)
 st.page_link("lab.py", label="Watch it learn live in the AI Lab", icon="🧪")
 

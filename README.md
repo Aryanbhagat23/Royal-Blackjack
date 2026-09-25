@@ -2,7 +2,7 @@
 ### A casino that taught itself to play: reinforcement learning in action
 
 Royal Blackjack is a full casino Blackjack game built with **Streamlit**, powered by AI agents that learned
-to play entirely on their own through **Monte Carlo reinforcement learning**. No strategy was programmed in:
+to play entirely on their own through **Monte Carlo reinforcement learning**, then graded against an exact solver. No strategy was programmed in:
 the agents started knowing nothing, played hundreds of thousands of hands, and rediscovered the
 professional "basic strategy" from wins and losses alone.
 
@@ -33,12 +33,13 @@ professional "basic strategy" from wins and losses alone.
 | 🧭 **Casino Advisor** | Tap your cards and the dealer's up card to get the best move, then print a strategy card generated from what the AI learned. |
 | 🧮 **Card Counter** | A second agent trained on a real 6-deck shoe with the Hi-Lo count in its state. It learns what each count is worth, how much to bet, and which decisions the count should change — and it beats the house edge. |
 | 💬 **Ask the Professor** (optional) | A chat that explains the agent's decisions in plain language, powered by either a local model (**Ollama**) or **Google Gemini**. It is fed the agent's real learned values (including any hand you mention, like "16 vs 10"), so it explains measured results instead of inventing advice. It also learns from 👍/👎: a Thompson-sampling bandit picks the teaching style students rate best. With neither configured it hides itself, and nothing else changes. |
-| 🔬 **Algorithm race** | The same game learned four ways — Monte Carlo, Q-learning, SARSA, and a Deep Q-Network written from scratch in numpy — scored on chart accuracy and money. |
+| 🎯 **Strategy Trainer** | Drills real decisions and checks every answer against the exact solver. Shows what each mistake costs in cents, tracks your weak spots, and brings missed hands back for review (spaced repetition). |
+| 🔬 **Research Lab** | Exact grade of the agents against a solver, a heatmap of every decision's cost, agent estimates with confidence intervals, a five-algorithm race over several seeds, a house-edge calculator for any table rules, and CSV/JSON downloads. |
 | 🧪 **AI Lab** | Strategy charts, a live learning-curve experiment, a Q-value explorer, and agent tournaments. |
 | 📖 **How the AI Works** | The reinforcement learning explained with diagrams, equations, and the actual code. |
 
 **Also included:** two dealers with different rules (stands on 17 vs. hits soft 17), an Expert agent
-(300,000 hands) and a Rookie agent (5,000 hands), Hi-Lo card counting, bankroll tracking, and 3:2 blackjack payouts.
+(30 million hands + precision practice) and a Rookie agent (5,000 hands), Hi-Lo card counting, bankroll tracking, and 3:2 blackjack payouts.
 
 ---
 
@@ -50,21 +51,55 @@ Blackjack is modeled as a **Markov Decision Process**:
 - **Actions:** hit, stand, double, split
 - **Reward:** money won per unit bet (+1 win, −1 loss, 0 push; ×2 after doubling; a split earns the total of both hands)
 
-The agent learns with **Monte Carlo control with exploring decisions**. Each hand it plays its current best
-strategy, except for one random exploring move, and it learns only from that move onward. Values are running
-averages, so they settle on the true values:
+**1. Monte Carlo control with exploring decisions (30 million hands).** Each hand the agent plays its current best
+strategy except for one random exploring move, and learns only from that move onward. Values are running averages:
 
 ```
 Q(s, a) ← Q(s, a) + (G − Q(s, a)) / N(s, a)
 ```
 
-**A bug worth knowing about:** an earlier version also learned from hands with no exploring move. That caused a
-selection bias (short, lucky hands were over-counted), which made the agent overrate hitting. Hitting 11 vs a
-dealer 10 was estimated at +0.22 when the true value is +0.12. Skipping those hands fixed it.
+An earlier version also learned from hands with no exploring move. That caused a selection bias (short, lucky hands
+were over-counted) and made the agent overrate hitting; skipping those hands fixed it.
 
-**Safety for rare situations:** hands that almost never occur (like a hard 20 right after splitting tens) borrow
-hit/stand values from the same total made with more cards, which is exact for an endless deck. Guaranteed rules
-(never stand on 11 or less, never hit a hard 20) act as a final guardrail.
+**2. Precision practice (10 million deals).** Exact grading (below) showed that every remaining mistake was in a
+*rare* hand: a pair of 4s against a 3 gets about 50× less random practice than 16 against a 10. Precision practice
+is still learning from experience only, but spends it where the agent is unsure:
+
+- **exploring starts** — practice hands are dealt straight into decisions that are not settled yet;
+- **paired comparisons** — every legal move is played against the *same* upcoming cards (common random numbers),
+  so luck cancels out of the comparison;
+- **a stopping rule** — a decision is settled when the best move is ahead by 3 standard errors, or the other moves
+  are within 0.1¢ per $1 of it (a genuine tie). This is best-arm identification inside Monte Carlo control.
+
+**3. Safety for rare situations.** Hands that almost never occur borrow hit/stand values from the same total made
+with more cards (exact for an endless deck), and guaranteed rules (never stand on 11 or less, never hit a hard 20)
+act as a final guardrail.
+
+## 🎯 Exact grading: how good is it, really?
+
+Blackjack is small enough to **solve exactly**. `solver.py` computes the true value of every move by working through
+every card that can come next (dynamic programming over an infinite deck, same rules as the agents), and the exact
+long-run value of *any* strategy. The agents never see the solver; it is only the examiner, so there is no
+simulation noise in any number below.
+
+| Dealer stands on 17 | Money per $100 (exact) | Gap to perfect | Perfect first decisions |
+|---|---|---|---|
+| 📏 Simple rule (hit until 17) | −$5.675 | 510¢ | — |
+| 🧢 Rookie agent (5,000 hands) | −$14.505 | 1,393¢ | 45.2% |
+| 🤖 Expert, self-play only (30M hands) | −$0.597 | 2.66¢ | 97.3% |
+| 📘 Published 6-deck chart | −$0.571 | 0.08¢ | 99.4% |
+| 🎯 **Expert + precision practice** | **−$0.572** | **0.13¢** | **99.7%** |
+| ✨ Perfect play | −$0.570 | 0 | 100% |
+
+Against a dealer who **hits soft 17**, the expert with precision practice plays **perfectly**: 100% of first decisions,
+exact value −$0.789 per $100, identical to perfect play.
+
+> **A correction.** Earlier versions of this README said the agent (−$0.43) beat the chart (−$0.48). Those were
+> simulations with a margin of error of about ±$0.18 per $100, so the gap was noise. Exact grading shows the
+> self-play agent was 2.7¢ per $100 *behind* the chart, and precision practice closed almost all of that gap.
+
+The remaining S17 difference is soft 18 against a 2 (double vs stand), worth 0.2¢ per $1 on a hand that comes up
+in 0.09% of rounds.
 
 ### The counting agent (25 million shoe rounds per dealer)
 
@@ -79,50 +114,69 @@ A second agent (`counting.py`) plays a real 6-deck shoe, so it can track the **H
 | Dealer stands on 17 | **+$0.60 per $100 wagered** | −$0.52 |
 | Dealer hits soft 17 | **+$0.04 per $100 wagered** | −$0.76 |
 
-It measured the value of each count from **−2.6% per dollar at true count −3** to **+2.4% at +5**, crossing into
-profit around **+1**, and rediscovered classic deviations (double 9 vs 2 at a positive count, hit 13 vs 2 at a
-negative one). Counting is the only version here that beats the house edge — by a fraction of a percent, with huge
-swings, under ideal conditions. It is a demonstration, not a business plan.
+These counting results are simulations (a finite shoe can't be solved the same way), so treat the second decimal
+as noise. It is a demonstration, not a business plan.
 
-### Algorithms compared (`algorithms.py`)
+### Algorithms compared
 
-| Algorithm | Matches the chart | Per $100 |
-|---|---|---|
-| 🎲 Monte Carlo (used by the main agent) | **92%** | −0.8 |
-| ⚡ Q-learning | 82% | −1.5 |
-| 🐢 SARSA | 82% | −3.0 |
-| 🧠 Deep Q-Network (numpy, no PyTorch) | 75% | −6.6 |
+The same game learned five ways and scored **exactly** (`python experiments.py race`), mean ± standard deviation
+over 3 seeds, dealer stands on 17:
 
-Monte Carlo wins because hands are short and the reward comes at the end, so learning from the true result is
-unbiased. Temporal-difference methods bootstrap from their own estimates (extra noise, no benefit here), and the
-neural network approximates a table that only needs a few hundred entries while training ~50× slower per hand.
-Neural networks earn their keep when the state space is too large to tabulate.
+| Algorithm | Hands | Perfect first decisions | Gap to perfect play (per $100) |
+|---|---|---|---|
+| 🎯 **MC + precision practice** | 6M | **98.0% ± 0.5** | **2.4¢ ± 0.9** |
+| 🎲 Monte Carlo | 6M | 92.7% ± 0.9 | 8.8¢ ± 2.9 |
+| ⚡ Q-learning | 6M | 83.8% ± 1.7 | 234¢ ± 75 |
+| 🐢 SARSA | 6M | 80.4% ± 0.7 | 241¢ ± 88 |
+| 🧠 Deep Q-Network (numpy, no PyTorch) | 200k | 72.3% ± 4.4 | 420¢ ± 66 |
 
-### Baselines
+With the same number of hands, precision practice (half self-play, half targeted practice) gets **3.6× closer to
+perfect play** than plain Monte Carlo. At a small budget it does not help: at 1.5M hands plain Monte Carlo was
+slightly ahead (gap 27¢ vs 40¢, within noise), because comparing moves needs a reasonable base strategy to play out
+the rest of the hand. It is a fine-tuning method, and that is where the shipped experts use it
+(`results/race_1500000_hands.json` has the small-budget run).
 
-Every result is measured against simpler players, so the numbers mean something:
+Monte Carlo beats the temporal-difference methods because hands are short and the reward comes at the end, so
+learning from the true result is unbiased; Q-learning and SARSA bootstrap from their own estimates. The neural
+network approximates a table that only needs a few hundred entries while training ~50× slower per hand. Neural
+networks earn their keep when the state space is too large to tabulate.
 
-| Player | Money per $100 | What it is |
-|---|---|---|
-| 🎲 Random play | **−$43** | picks legal moves at random |
-| 📏 Simple rule | **−$5.54** | no learning: copy the dealer, hit until 17 |
-| 📘 Basic strategy chart | **−$0.48** | the best a non-counting player can do |
-| 🤖 Trained agent (30M hands) | **−$0.43** | learned from wins and losses alone |
-| 🧮 Counting agent | **+$0.60** | per $100 wagered — beats the house |
+## 🔬 For researchers
 
-"Rulebook Rita", a player that follows the simple rule with no learning at all, can be seated at the casino table
-next to the trained and rookie agents, so the difference is visible hand by hand.
-
-### Results (Expert, 30 million training hands per dealer)
-
-| | Result |
+| File | What it gives you |
 |---|---|
-| Matches the official basic strategy chart | **96.7%** of 330 two-card decisions (every difference is a statistical tie) |
-| Loss per $100 bet | **about $0.42–0.60**, the same as playing the textbook chart |
-| Random play, for comparison | loses about **$43** per $100 |
-| Rookie agent (5,000 hands) | matches the chart on only **~45%** of decisions |
+| `solver.py` | Exact values of every move; `policy_ev(policy)` and `regret(policy)` grade **any** strategy exactly; `house_edge(Rules(...))` for rule variations |
+| `blackjack_env.py` | A **Gymnasium** environment with double and split (Gymnasium's built-in Blackjack has only hit/stand), action masks, seeding |
+| `experiments.py` | Multi-seed algorithm race scored exactly, reports and CSV exports, with Python version and git commit recorded |
+| `tests/` | 26 tests: engine rules, solver vs simulation, environment vs solver, reproducibility, chat helpers |
 
-The small loss that remains is the house edge. No strategy can beat it without counting cards.
+```python
+from blackjack_env import BlackjackEnv
+import solver
+
+env = BlackjackEnv()                        # Gymnasium API: reset(seed), step(action)
+obs, info = env.reset(seed=0)               # obs = (total, dealer card, soft, can double, pair)
+
+result = solver.regret(my_policy)           # my_policy(state, legal_actions) -> 0 hit / 1 stand / 2 double / 3 split
+print(result["regret"] * 10000, "cents per $100 from perfect play")
+```
+
+**Reproduce everything**
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+python blackjack_rl.py train 30000000      # seeded Monte Carlo self-play
+python blackjack_rl.py refine 10000000     # precision practice on the saved experts
+python experiments.py race --seeds 0 1 2 --budget 6000000
+python experiments.py report               # results/report.md
+python experiments.py export               # exact value tables and Q-tables as CSV
+```
+
+**Assumptions.** Infinite deck for the base agents and the solver (a 6-deck shoe moves the house edge by less than
+0.1% and flips a handful of near-tie decisions); dealer peeks; double on any two cards and after a split; one split;
+split aces get one card. Not modelled: re-splitting, insurance. The house-edge calculator also offers late
+surrender and 6:5 payouts. If you use this work, see [CITATION.cff](CITATION.cff).
 
 ---
 
@@ -139,9 +193,10 @@ To try multiplayer locally, open the Multiplayer page in two browser tabs: creat
 
 The four trained agents are included as `q_*.pkl` files, so the app starts instantly. If you delete them, the app retrains them on first launch (a few minutes).
 
-To retrain the experts from the command line (30 million hands each) and grade them:
+To retrain the experts from the command line and grade them exactly:
 ```bash
-python blackjack_rl.py 30000000
+python blackjack_rl.py train 30000000    # Monte Carlo self-play
+python blackjack_rl.py refine 10000000   # precision practice
 ```
 
 To retrain the counting agents (25 million shoe rounds each, a few minutes):
@@ -149,10 +204,12 @@ To retrain the counting agents (25 million shoe rounds each, a few minutes):
 python counting.py 25000000
 ```
 
-To re-run the algorithm race:
+To re-run the algorithm race (several seeds in parallel, scored exactly):
 ```bash
-python algorithms.py 3000000
+python experiments.py race --seeds 0 1 2 --budget 6000000
 ```
+
+Run the tests with `pip install -r requirements-dev.txt && pytest`.
 
 ---
 
@@ -160,20 +217,26 @@ python algorithms.py 3000000
 
 ```
 app.py            Entry point and page navigation
-home.py           Landing page: hero, quick play, results, theme gallery
+home.py           Landing page: hero, results, features, theme gallery
 table.py          Casino table game (single player)
 multiplayer.py    Online multiplayer rooms
+trainer.py        Strategy Trainer: drills scored against the exact solver, spaced repetition of mistakes
 advisor.py        Casino Advisor and printable strategy card
+research.py       Research Lab: exact grade, error heatmaps, algorithm race, house-edge calculator, data
 lab.py            AI Lab: charts, learning curve, Q-values, tournaments
 card_counter.py   Card Counter page: count value, bet ramp, deviations, simulation
-counting.py       The card-counting agent: shoe simulation, bet sizing, deviation measurement
-algorithms.py     Q-learning, SARSA and a from-scratch neural DQN, for the algorithm race
-llm.py            Optional local-LLM support (Ollama): detection, context building, streaming
-ask.py            The "Ask the Professor" chat page
 learn.py          Reinforcement learning explained
+ask.py            The "Ask the Professor" chat page
+blackjack_rl.py   The RL agent: engine, Monte Carlo training, precision practice, evaluation, CLI
+solver.py         Exact solver: optimal values, exact value and regret of any strategy, house edge
+blackjack_env.py  Gymnasium environment with double and split
+experiments.py    Reproducible multi-seed experiments, reports and CSV exports
+algorithms.py     Q-learning, SARSA and a from-scratch neural DQN, for the algorithm race
+counting.py       The card-counting agent: shoe simulation, bet sizing, deviation measurement
+llm.py            Optional chat support (Ollama or Gemini): model selection, grounding, streaming
+professor_rl.py   Thompson-sampling bandit that learns the chat's best teaching style from 👍/👎
 shared.py         Shared agents, dealer rules, theme engine and table renderer
-blackjack_rl.py   The RL agent: environment, training, evaluation
-.streamlit/       Theme configuration
+tests/            pytest suite
 ```
 
 ---
@@ -203,13 +266,11 @@ rather than making up its own Blackjack advice.
 
 ## ⚠️ Limitations and future work
 
-- The base agent trains on an endless deck, so it ignores which cards have been played (the counting agent doesn't).
-- Only one split per hand; insurance and surrender are not implemented.
-- The Q-table approach works because Blackjack has few states; larger games need Deep Q-Learning.
-
-**Multiplayer note:** rooms live in the server's memory, so they reset if the app restarts.
-
-**Planned:** comparisons with Q-learning, SARSA, and a neural network (Deep Q-Learning), plus resplitting and insurance.
+- The base agents and the solver use an endless deck (the counting agent plays a real shoe). A composition-dependent
+  solver for finite shoes would let the counting agent be graded exactly too.
+- Only one split per hand; insurance and re-splitting are not implemented in the game.
+- Training is pure Python (about 150k hands per second); vectorising it would make large experiments much faster.
+- Chat ratings and multiplayer rooms live on the server, so they reset when the app restarts.
 
 ---
 

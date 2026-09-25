@@ -13,11 +13,17 @@ alternatives on exactly the same game, so they can be raced against each other:
   target network. Blackjack is small enough that a table wins easily, which is exactly the point:
   neural networks are for games too big to tabulate.
 
-Every learner is scored the same two ways: how often it matches the official basic strategy chart,
-and how much money it wins or loses per $100 bet.
+A fifth entrant, **Monte Carlo + precision practice**, spends half of the same hand budget on ordinary
+self-play and half on targeted, paired practice of unsettled decisions (`blackjack_rl.refine`).
 
-Run directly to produce the comparison used by the app:
-    python algorithms.py
+Every learner is scored exactly with `solver.py` — no simulation noise:
+  * optimal  – share of first decisions where it picks a perfect move
+  * per_100  – exact money won or lost per $100 with its strategy
+  * regret   – money per $100 it gives up compared with perfect play
+  * match    – agreement with the published 6-deck chart (kept for reference)
+
+Run the reproducible, multi-seed version with:
+    python experiments.py race
 """
 
 import json
@@ -28,10 +34,11 @@ import random
 import numpy as np
 
 import blackjack_rl as rl
+import solver
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_PATH = os.path.join(BASE_DIR, "algorithm_race.json")
-ALGORITHMS = ["Monte Carlo", "Q-learning", "SARSA", "Deep Q-Network"]
+ALGORITHMS = ["Monte Carlo", "MC + precision practice", "Q-learning", "SARSA", "Deep Q-Network"]
 
 
 # =========================================================
@@ -298,22 +305,26 @@ def MLP_copy(net):
 # Scoring and the race
 # =========================================================
 
-def score(Q, hit_soft17=False, hands=60_000):
+def score(Q, hit_soft17=False):
+    """Exact scores for a Q-table (or anything with .get), using the solver instead of simulation."""
     g = rl.grade(Q, None, hit_soft17)
-    e = rl.evaluate(Q, hands, hit_soft17)
-    return {"match": g["matches"] / g["total"], "per_100": e["avg_reward"] * 100}
+    r = solver.regret(solver.greedy_policy(Q), solver.AGENT_RULES["H17" if hit_soft17 else "S17"])
+    return {"match": g["matches"] / g["total"], "optimal": r["optimal_share"],
+            "per_100": r["policy_ev"] * 100, "regret_100": r["regret"] * 100}
 
 
-def race(budget=1_500_000, dqn_budget=200_000, hit_soft17=False, points=6, eval_hands=60_000,
-         progress=None):
-    """Train all four learners with checkpoints and score each one along the way."""
+def race(budget=1_500_000, dqn_budget=200_000, hit_soft17=False, points=6, progress=None, seed=None):
+    """Train all learners with checkpoints and score each one exactly along the way."""
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
     ref = rl.load_bundle(os.path.join(BASE_DIR, "q_expert_S17.pkl" if not hit_soft17 else "q_expert_H17.pkl"))
     ref_Q = rl.robust_q(ref["Q"], ref["N"])
     marks = [int(budget * (k + 1) / points) for k in range(points)]
     dqn_marks = [int(dqn_budget * (k + 1) / points) for k in range(points)]
     out = {name: [] for name in ALGORITHMS}
     done = [0]
-    total_jobs = 4
+    total_jobs = len(ALGORITHMS)
 
     def note(job):
         done[0] += 1
@@ -325,44 +336,51 @@ def race(budget=1_500_000, dqn_budget=200_000, hit_soft17=False, points=6, eval_
     for k, m in enumerate(marks):
         chunk = m - (marks[k - 1] if k else 0)
         rl.train(chunk, hit_soft17, Q, N)
-        out["Monte Carlo"].append({"hands": m, **score(Q, hit_soft17, eval_hands)})
+        out["Monte Carlo"].append({"hands": m, **score(rl.robust_q(Q, N), hit_soft17)})
     note("mc")
+
+    # Monte Carlo + precision practice: the same number of hands, half self-play, half targeted.
+    # A paired practice deal plays every legal move (about 3.3 hands), so deals = hands / 3.3.
+    Q, N, stats = {}, {}, None
+    for k, m in enumerate(marks):
+        chunk = m - (marks[k - 1] if k else 0)
+        rl.train(chunk // 2, hit_soft17, Q, N)
+        stats, _ = rl.refine(Q, N, hit_soft17, budget=int(chunk / 2 / 3.3), stats=stats)
+        out["MC + precision practice"].append({"hands": m, **score(rl.robust_q(Q, N), hit_soft17)})
+    note("mc+")
 
     for name, sarsa in (("Q-learning", False), ("SARSA", True)):
         results = []
         train_td(budget, hit_soft17, sarsa=sarsa, ref_Q=ref_Q, checkpoints=marks,
-                 on_checkpoint=lambda m, q, r=results: r.append({"hands": m, **score(q, hit_soft17, eval_hands)}))
+                 on_checkpoint=lambda m, q, r=results: r.append({"hands": m, **score(q, hit_soft17)}))
         out[name] = results
         note(name)
 
     results = []
-    train_dqn(dqn_budget, hit_soft17, ref_Q=ref_Q, checkpoints=dqn_marks,
-              on_checkpoint=lambda m, q, r=results: r.append({"hands": m, **score(q, hit_soft17, eval_hands)}))
+    train_dqn(dqn_budget, hit_soft17, ref_Q=ref_Q, checkpoints=dqn_marks, seed=seed or 0,
+              on_checkpoint=lambda m, q, r=results: r.append({"hands": m, **score(q, hit_soft17)}))
     out["Deep Q-Network"] = results
     note("dqn")
     return out
 
 
-def save_race(data, path=RESULTS_PATH):
+def save_race(results, path=RESULTS_PATH, meta=None):
     with open(path, "w") as f:
-        json.dump(data, f)
+        json.dump({"meta": meta or {}, "results": results}, f, indent=1)
 
 
 def load_race(path=RESULTS_PATH):
+    """{algorithm: [checkpoint rows]} (averaged over seeds when several were run)."""
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
+    return data["results"] if "results" in data else data
+
+
+def load_race_meta(path=RESULTS_PATH):
+    with open(path) as f:
+        data = json.load(f)
+    return data.get("meta", {}) if "results" in data else {}
 
 
 if __name__ == "__main__":
-    import sys
-    import time
-
-    budget = int(sys.argv[1]) if len(sys.argv) > 1 else 1_500_000
-    t0 = time.time()
-    data = race(budget)
-    save_race(data)
-    print(f"done in {time.time() - t0:.0f}s")
-    for name, rows in data.items():
-        last = rows[-1]
-        print(f"{name:>16}: {last['hands']:>9,} hands → chart match {last['match']:.1%}, "
-              f"{last['per_100']:+.2f} per $100")
+    print("Run `python experiments.py race` for the reproducible multi-seed comparison.")

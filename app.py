@@ -15,13 +15,17 @@ pages = {
     "Play": [
         st.Page("table.py", title="Casino Table", icon="🎰"),
         st.Page("multiplayer.py", title="Multiplayer", icon="👥"),
+        st.Page("trainer.py", title="Strategy Trainer", icon="🎯"),
         st.Page("advisor.py", title="Casino Advisor", icon="🧭"),
     ],
     "Learn": [
+        st.Page("learn.py", title="How the AI Works", icon="🎓"),
         st.Page("lab.py", title="AI Lab", icon="🧪"),
         st.Page("card_counter.py", title="Card Counter", icon="🧮"),
-        st.Page("learn.py", title="How the AI Works", icon="🎓"),
         st.Page("ask.py", title="Ask the Professor", icon="💬"),
+    ],
+    "Research": [
+        st.Page("research.py", title="Research Lab", icon="🔬"),
     ],
 }
 nav = st.navigation(pages, position="top")

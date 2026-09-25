@@ -66,6 +66,23 @@ def get_agents():
     return _robust_agents(id(get_bundles()))
 
 
+@st.cache_resource(show_spinner=False)
+def exact_grade(level, rule):
+    """Exact grade of an agent from the solver: EVs, regret and the cost of every first decision."""
+    import solver
+    return solver.regret(solver.greedy_policy(get_agents()[(level, rule)]), solver.AGENT_RULES[rule])
+
+
+@st.cache_data(show_spinner=False)
+def exact_baselines(rule):
+    """Exact money per $100 for the reference strategies (no simulation noise)."""
+    import solver
+    rules = solver.AGENT_RULES[rule]
+    return {"Simple rule (stand on 17)": solver.policy_ev(rl.simple_rule_policy(), rules) * 100,
+            "Basic strategy chart (6-deck)": solver.policy_ev(rl.basic_strategy_policy(rules.hit_soft17), rules) * 100,
+            "Perfect play": solver.house_edge(rules) * 100}
+
+
 # -----------------------------
 # Advice helpers (infinite-deck odds, for use without a known shoe)
 # -----------------------------
