@@ -597,16 +597,31 @@ with right:
 
             provs = llm_status()
             if provs:
-                with st.expander("💬 Ask about this hand"):
-                    q = st.text_input("Your question", key="hand_q",
-                                      placeholder="e.g. why not double here?", label_visibility="collapsed")
-                    if q:
+                # Gemini first when both exist: a model running on a laptop can take a minute to answer.
+                pid, plabel, pmodels = sorted(provs, key=lambda p: p[0] != "gemini")[0]
+                hand_id = (tuple(c["rank"] for c in me["cards"]), up["rank"])
+                answers = ss.setdefault("hand_answers", {})
+                with st.expander("💬 Ask about this hand", expanded=any(k[0] == hand_id for k in answers)):
+                    for (hid, question), reply in answers.items():
+                        if hid == hand_id:
+                            st.markdown(f"**You:** {question}")
+                            st.markdown(reply)
+                    with st.form("hand_ask", clear_on_submit=True, border=False):
+                        q = st.text_input("Your question", placeholder="e.g. why not double here?",
+                                          label_visibility="collapsed")
+                        asked = st.form_submit_button("Ask the Professor", width="stretch")
+                    if asked and q.strip():
                         ctx = llm.hand_context(me["cards"], up, values, best, bust, dbust,
                                                true_count() if ss.show_count else None, ss.bankroll)
-                        pid, plabel, pmodels = provs[0]
-                        st.write_stream(llm.stream(pid, llm.default_model(pid, pmodels),
-                                                   [{"role": "user", "content": q}], ctx, fallbacks=pmodels))
-                        st.caption(f"Answered by {plabel}, using the agent's real numbers for this exact hand.")
+                        st.markdown(f"**You:** {q}")
+                        with st.spinner(f"The Professor is thinking ({plabel})..."):
+                            reply = st.write_stream(llm.stream(pid, llm.default_model(pid, pmodels),
+                                                               [{"role": "user", "content": q}], ctx,
+                                                               fallbacks=pmodels))
+                        # Keep only this hand's answers, so each question is sent to the model once.
+                        ss.hand_answers = {k: v for k, v in answers.items() if k[0] == hand_id}
+                        ss.hand_answers[(hand_id, q)] = reply
+                    st.caption(f"Answered by {plabel}, using the agent's real numbers for this exact hand.")
             tc = true_count()
             if ss.show_count and abs(tc) >= 2:
                 st.info(f"{'📈' if tc > 0 else '📉'} True count **{tc:+.1f}**: the shoe favors "
